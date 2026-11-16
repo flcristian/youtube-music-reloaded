@@ -13,6 +13,12 @@
       }
     }
   },
+  "custom-settings": {
+    "close": "Close",
+    "empty": "No custom plugins are enabled. Enable one from the Plugins menu.",
+    "hint": "Cmd+Shift+. to open or close · Esc to close · changes save automatically",
+    "title": "Custom plugin settings"
+  },
   "language": {
     "code": "en",
     "local-name": "English",
@@ -801,6 +807,21 @@
             "label": "Enter your ListenBrainz user token:",
             "title": "ListenBrainz token"
           }
+        }
+      }
+    },
+    "seamless-crossfade": {
+      "description": "Crossfades on every song change: the song you leave keeps playing and fades out while the next one fades in. Reuses already-downloaded audio, no extra streams. Settings: Cmd+Shift+.",
+      "name": "Seamless Crossfade",
+      "settings": {
+        "auto": "Crossfade at the end of a song",
+        "manual": "Crossfade when changing songs manually",
+        "duration": "Duration",
+        "curve": {
+          "label": "Fade curve",
+          "equal-power": "Equal power",
+          "linear": "Linear",
+          "steep": "Steep"
         }
       }
     },

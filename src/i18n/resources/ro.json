@@ -13,6 +13,12 @@
       }
     }
   },
+  "custom-settings": {
+    "close": "Închide",
+    "empty": "Niciun plugin personalizat nu e activat. Activează unul din meniul Plugins.",
+    "hint": "Cmd+Shift+. deschide sau închide · Esc închide · modificările se salvează automat",
+    "title": "Setări pluginuri personalizate"
+  },
   "language": {
     "code": "ro",
     "local-name": "Română",
@@ -786,6 +792,21 @@
             "label": "Introdu token-ul tău de utilizator ListenBrainz:",
             "title": "Token-ul ListenBrainz"
           }
+        }
+      }
+    },
+    "seamless-crossfade": {
+      "description": "Crossfade la fiecare schimbare de piesă: piesa pe care o lași continuă și scade în volum, iar următoarea crește. Refolosește audio-ul deja descărcat, fără stream-uri în plus. Setări: Cmd+Shift+.",
+      "name": "Seamless Crossfade",
+      "settings": {
+        "auto": "Crossfade la finalul piesei",
+        "manual": "Crossfade la schimbarea manuală a piesei",
+        "duration": "Durată",
+        "curve": {
+          "label": "Curba fade-ului",
+          "equal-power": "Equal power",
+          "linear": "Liniar",
+          "steep": "Abrupt"
         }
       }
     },
