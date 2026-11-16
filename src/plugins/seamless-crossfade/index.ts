@@ -4,6 +4,7 @@ import { createPlugin } from '@/utils';
 
 import { Crossfader } from './crossfader';
 import { MirrorManager } from './mirror';
+import { PlayFrom } from './play-from';
 import { defaultConfig, type SeamlessCrossfadeConfig } from './settings';
 import { renderSettings } from './settings-section';
 
@@ -19,6 +20,7 @@ export default createPlugin<
     mirrors?: MirrorManager;
     api?: MusicPlayer;
     crossfader?: Crossfader;
+    playFrom?: PlayFrom;
     unregisterSettings?: () => void;
   },
   SeamlessCrossfadeConfig
@@ -68,11 +70,22 @@ export default createPlugin<
         () => this.config,
       );
       this.crossfader.attach();
+
+      // "Play from…" in song menus.
+      this.playFrom = new PlayFrom(api, (startAt) =>
+        this.crossfader?.prepareJump(this.config.jumpDuration, startAt),
+      );
+      this.playFrom.install();
+      this.crossfader.scheduledStart = (videoId) =>
+        this.playFrom?.scheduledStart(videoId);
+      this.crossfader.intervalEnd = (videoId) =>
+        this.playFrom?.intervalEnd(videoId);
     },
 
     stop() {
       this.unregisterSettings?.();
       this.crossfader?.detach();
+      this.playFrom?.uninstall();
     },
   },
 });

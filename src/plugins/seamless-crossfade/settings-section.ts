@@ -67,6 +67,16 @@ export const renderSettings = (
     },
   });
 
+  const jumpDuration = createSlider({
+    label: t(key('jump')),
+    value: config.jumpDuration,
+    min: MIN_DURATION,
+    max: MAX_DURATION,
+    step: 0.5,
+    unit: 's',
+    onChange: (seconds) => save({ jumpDuration: clampDuration(seconds) }),
+  });
+
   const curve = createChoice<FadeCurve>({
     label: t(key('curve.label')),
     value: config.curve,
@@ -83,6 +93,7 @@ export const renderSettings = (
     autoDuration.row,
     manualToggle.row,
     manualDuration.row,
+    jumpDuration.row,
     curve.row,
   );
 };

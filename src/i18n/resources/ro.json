@@ -798,16 +798,24 @@
     "seamless-crossfade": {
       "description": "Crossfade la fiecare schimbare de piesă: piesa pe care o lași continuă și scade în volum, iar următoarea crește. Refolosește audio-ul deja descărcat, fără stream-uri în plus. Setări: Cmd+Shift+.",
       "name": "Seamless Crossfade",
+      "play-from": {
+        "add-to-queue": "Adaugă în coadă",
+        "cancel": "Anulează",
+        "confirm": "Redă {{range}}",
+        "menu": "Redă de la…",
+        "play-next": "Redă următoarea"
+      },
       "settings": {
         "auto": "Crossfade la finalul piesei",
-        "manual": "Crossfade la schimbarea manuală a piesei",
-        "duration": "Durată",
         "curve": {
           "label": "Curba fade-ului",
           "equal-power": "Equal power",
           "linear": "Liniar",
           "steep": "Abrupt"
-        }
+        },
+        "duration": "Durată",
+        "jump": "Crossfade pentru „Redă de la…”",
+        "manual": "Crossfade la schimbarea manuală a piesei"
       }
     },
     "shortcuts": {
@@ -987,6 +995,10 @@
         "visualizer-type": "Tip de vizualizator"
       },
       "name": "Vizualizator"
+    },
+    "waveform-seekbar": {
+      "description": "Afișează toată piesa ca waveform în stil SoundCloud în locul barei de progres, cu partea ascultată evidențiată. Click sau drag pentru a sări. Comutare: Cmd+Shift+V",
+      "name": "Waveform în loc de bara de progres"
     }
   }
 }

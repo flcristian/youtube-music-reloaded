@@ -11,6 +11,8 @@ export type SeamlessCrossfadeConfig = {
   /** How long the song you leave keeps playing, in seconds. */
   manualDuration: number;
   curve: FadeCurve;
+  /** Crossfade when using "Play from…" (song menu), in seconds. */
+  jumpDuration: number;
 };
 
 export const defaultConfig: SeamlessCrossfadeConfig = {
@@ -20,6 +22,7 @@ export const defaultConfig: SeamlessCrossfadeConfig = {
   manualEnabled: true,
   manualDuration: 5,
   curve: 'equal-power',
+  jumpDuration: 5,
 };
 
 export const MIN_DURATION = 0.5;

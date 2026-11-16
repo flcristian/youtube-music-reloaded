@@ -813,16 +813,24 @@
     "seamless-crossfade": {
       "description": "Crossfades on every song change: the song you leave keeps playing and fades out while the next one fades in. Reuses already-downloaded audio, no extra streams. Settings: Cmd+Shift+.",
       "name": "Seamless Crossfade",
+      "play-from": {
+        "add-to-queue": "Add to queue",
+        "cancel": "Cancel",
+        "confirm": "Play {{range}}",
+        "menu": "Play from…",
+        "play-next": "Play next"
+      },
       "settings": {
         "auto": "Crossfade at the end of a song",
-        "manual": "Crossfade when changing songs manually",
-        "duration": "Duration",
         "curve": {
           "label": "Fade curve",
           "equal-power": "Equal power",
           "linear": "Linear",
           "steep": "Steep"
-        }
+        },
+        "duration": "Duration",
+        "jump": "Crossfade for \"Play from…\"",
+        "manual": "Crossfade when changing songs manually"
       }
     },
     "shortcuts": {
@@ -1018,6 +1026,10 @@
         "visualizer-type": "Visualizer Type"
       },
       "name": "Visualizer"
+    },
+    "waveform-seekbar": {
+      "description": "Shows the whole song as a SoundCloud-style waveform instead of the progress bar, with the played part highlighted. Click or drag to seek. Toggle: Cmd+Shift+V",
+      "name": "Waveform Seekbar"
     }
   }
 }
