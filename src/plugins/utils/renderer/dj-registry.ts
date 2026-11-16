@@ -22,6 +22,12 @@ export interface DjFeatures {
     interval: SongInterval,
     position: QueuePosition,
   ) => void;
+  /** The part of the playing song that plays (start/end in seconds). */
+  currentPart: () =>
+    | { videoId: string; start: number; end?: number }
+    | undefined;
+  /** Move where the playing song ends; `undefined`: until its end. */
+  setPartEnd: (end: number | undefined) => void;
   getCrossfadeConfig: () => SeamlessCrossfadeConfig;
   setCrossfadeConfig: (changes: Partial<SeamlessCrossfadeConfig>) => void;
 }

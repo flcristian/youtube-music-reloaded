@@ -9,7 +9,9 @@ import {
   clampDuration,
   type FadeCurve,
   MAX_DURATION,
+  MAX_PART_LENGTH,
   MIN_DURATION,
+  MIN_PART_LENGTH,
   type SeamlessCrossfadeConfig,
 } from './settings';
 
@@ -83,6 +85,16 @@ export const renderSettings = (
     onChange: (value) => save({ askOnPlay: value }),
   });
 
+  const bestPartLength = createSlider({
+    label: t(key('best-part-length')),
+    value: config.bestPartLength,
+    min: MIN_PART_LENGTH,
+    max: MAX_PART_LENGTH,
+    step: 10,
+    unit: 's',
+    onChange: (seconds) => save({ bestPartLength: seconds }),
+  });
+
   const curve = createChoice<FadeCurve>({
     label: t(key('curve.label')),
     value: config.curve,
@@ -101,6 +113,7 @@ export const renderSettings = (
     manualDuration.row,
     jumpDuration.row,
     askOnPlay.row,
+    bestPartLength.row,
     curve.row,
   );
 };

@@ -1,7 +1,7 @@
 /**
  * "Play best parts" / "Shuffle best parts" in a playlist's (or album's)
- * menu: plays the playlist with YouTube Music's own play/shuffle, but each
- * song only plays its best part (see `best-part.ts`).
+ * menu: plays up to `MAX_SONGS` of its songs (in order, or shuffled), each
+ * only for its best part (see `best-part.ts`).
  */
 import { t } from '@/i18n';
 import {
@@ -15,14 +15,14 @@ import { bestPartStart, loadReplayGraph } from './best-part';
 
 import type { Interval } from './play-from';
 
-/** Length of each song's part, in seconds. */
-export const PART_LENGTH = 120;
+/** Songs per run: keeps requests to YouTube well under any rate limit. */
+const MAX_SONGS = 50;
 /** Songs whose replay data is fetched at the same time. */
 const PARALLEL = 6;
+/** How long to wait for one song to show up in the queue. */
+const QUEUE_WAIT = 4000;
 /** Playlist pages read at most (≈100 songs each). */
 const MAX_PAGES = 50;
-/** YouTube Music's own "Shuffle play" parameters, if the menu has none. */
-const SHUFFLE_PARAMS = 'wAEB8gECKAE%3D';
 
 const key = (name: string) => `plugins.seamless-crossfade.best-parts.${name}`;
 
@@ -34,37 +34,48 @@ const SHUFFLE_ICON =
 
 type WithData = HTMLElement & { data?: unknown };
 
-interface PlaylistMenu {
-  playlistId: string;
-  shuffleParams: string;
-}
-
 /** The playlist an open menu belongs to, if it is a playlist/album menu. */
-const menuPlaylist = (listbox: Element): PlaylistMenu | undefined => {
-  let playlistId: string | undefined;
-  let shuffleParams: string | undefined;
+const menuPlaylist = (listbox: Element) => {
   for (const item of listbox.children) {
     const data = (item as WithData).data as
       | {
           serviceEndpoint?: {
             queueAddEndpoint?: { queueTarget?: { playlistId?: string } };
           };
-          navigationEndpoint?: {
-            watchPlaylistEndpoint?: { playlistId?: string; params?: string };
-          };
         }
       | undefined;
-    playlistId ??=
+    const playlistId =
       data?.serviceEndpoint?.queueAddEndpoint?.queueTarget?.playlistId;
-    const watch = data?.navigationEndpoint?.watchPlaylistEndpoint;
-    // "Shuffle play" plays the playlist itself; "Start radio" is an RD… mix.
-    if (watch?.playlistId && !watch.playlistId.startsWith('RD')) {
-      shuffleParams ??= watch.params;
-    }
+    if (playlistId) return playlistId;
   }
-  return playlistId
-    ? { playlistId, shuffleParams: shuffleParams ?? SHUFFLE_PARAMS }
-    : undefined;
+  return undefined;
+};
+
+/** Fisher–Yates shuffle (in place). */
+const shuffled = <T>(items: T[]) => {
+  for (let i = items.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [items[i], items[j]] = [items[j], items[i]];
+  }
+  return items;
+};
+
+const queueLength = () =>
+  document.querySelectorAll('ytmusic-player-queue-item').length;
+
+const wait = (ms: number) =>
+  new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+
+/** Wait (up to `timeout`) until `done()`; returns whether it happened. */
+const waitFor = async (done: () => boolean, timeout: number) => {
+  const until = performance.now() + timeout;
+  while (performance.now() < until) {
+    if (done()) return true;
+    await wait(100);
+  }
+  return done();
 };
 
 const seconds = (duration: string | undefined) => {
@@ -92,28 +103,39 @@ const playlistTracks = async (playlistId: string) => {
   return tracks;
 };
 
-/** The part of a song to play: its best part, or the middle without data. */
-const partOf = async (track: Track): Promise<Interval | undefined> => {
+/**
+ * The part of a song to play: its best part, the middle without replay
+ * data, or the whole song if it is short.
+ */
+const partOf = async (track: Track, part: number): Promise<Interval> => {
   const length = seconds(track.duration);
-  if (!length || length <= PART_LENGTH + 20) return undefined;
+  if (!length || length <= part + 20) return { start: 0 };
   const graph = await loadReplayGraph(track.videoId);
   const start = graph
-    ? bestPartStart(graph, length, PART_LENGTH)
-    : Math.max(15, Math.round(length * 0.45) - Math.round(PART_LENGTH / 2));
-  return { start, end: Math.min(length, start + PART_LENGTH) };
+    ? bestPartStart(graph, length, part)
+    : Math.max(15, Math.round(length * 0.45) - Math.round(part / 2));
+  return { start, end: Math.min(length, start + part) };
 };
 
 export class BestPartsPlaylist {
   private observer?: MutationObserver;
   private items: HTMLElement[] = [];
-  private menu?: PlaylistMenu;
+  private playlistId?: string;
   private spinner?: HTMLElement;
   /** Bumped by every run, so an older run that finishes late does nothing. */
   private run = 0;
 
   constructor(
-    /** Play these parts when their songs come up (replaces older ones). */
-    private readonly schedule: (parts: Map<string, Interval>) => void,
+    private readonly player: {
+      /** Play these parts when their songs come up (replaces older ones). */
+      schedule: (parts: Map<string, Interval>) => void;
+      /** Play a part now, crossfading. */
+      play: (videoId: string, interval: Interval) => void;
+      /** Insert a song right after the playing one. */
+      playNext: (videoId: string, interval: Interval) => void;
+      /** Length of each song's part, in seconds. */
+      partLength: () => number;
+    },
   ) {}
 
   install() {
@@ -140,12 +162,12 @@ export class BestPartsPlaylist {
       'ytmusic-menu-popup-renderer tp-yt-paper-listbox',
     );
     if (!listbox) return;
-    const menu = menuPlaylist(listbox);
-    if (!menu) {
+    const playlistId = menuPlaylist(listbox);
+    if (!playlistId) {
       for (const item of this.items) item.remove();
       return;
     }
-    this.menu = menu;
+    this.playlistId = playlistId;
     const [play, shuffle] = this.items;
     if (play.parentElement === listbox && play.nextElementSibling === shuffle) {
       return;
@@ -181,26 +203,33 @@ export class BestPartsPlaylist {
       item.style.background = '';
     });
     item.addEventListener('click', () => {
-      const menu = this.menu;
+      const playlistId = this.playlistId;
       document
         .querySelector<HTMLElement & { close?: () => void }>(
           'ytmusic-popup-container tp-yt-iron-dropdown',
         )
         ?.close?.();
-      if (menu) this.start(menu, shuffle).catch(console.warn);
+      if (playlistId) this.start(playlistId, shuffle).catch(console.warn);
     });
     return item;
   }
 
-  private async start(menu: PlaylistMenu, shuffle: boolean) {
+  private async start(playlistId: string, shuffle: boolean) {
     const run = ++this.run;
+    const stale = () => run !== this.run;
     this.showSpinner(t(key('loading')));
     try {
-      const tracks = await playlistTracks(menu.playlistId);
-      if (run !== this.run) return;
+      const all = await playlistTracks(playlistId);
+      if (stale()) return;
+      // One entry per song, then shuffle (if asked) before capping.
+      const unique = [
+        ...new Map(all.map((track) => [track.videoId, track])).values(),
+      ];
+      const tracks = (shuffle ? shuffled(unique) : unique).slice(0, MAX_SONGS);
       if (!tracks.length) throw new Error('Empty playlist');
 
       const parts = new Map<string, Interval>();
+      const partLength = this.player.partLength();
       let done = 0;
       const progress = () =>
         this.showSpinner(
@@ -210,34 +239,46 @@ export class BestPartsPlaylist {
           }),
         );
       progress();
-      const queue = [...tracks];
+      const pending = [...tracks];
       const worker = async () => {
-        for (let track = queue.shift(); track; track = queue.shift()) {
-          const part = await partOf(track).catch(() => undefined);
-          if (part) parts.set(track.videoId, part);
+        for (let track = pending.shift(); track; track = pending.shift()) {
+          const part = await partOf(track, partLength).catch(() => ({
+            start: 0,
+          }));
+          parts.set(track.videoId, part);
           done++;
-          if (run === this.run) progress();
+          if (!stale()) progress();
         }
       };
       await Promise.all(Array.from({ length: PARALLEL }, worker));
-      if (run !== this.run) return;
+      if (stale()) return;
 
-      this.schedule(parts);
-      const endpoint = shuffle
-        ? {
-            watchPlaylistEndpoint: {
-              playlistId: menu.playlistId,
-              params: menu.shuffleParams,
-            },
-          }
-        : { watchEndpoint: { playlistId: menu.playlistId } };
-      document.querySelector('ytmusic-app')?.dispatchEvent(
-        new CustomEvent('yt-navigate', {
-          bubbles: true,
-          composed: true,
-          detail: { endpoint },
-        }),
-      );
+      this.player.schedule(parts);
+      const [first, ...rest] = tracks;
+      this.player.play(first.videoId, parts.get(first.videoId)!);
+      // Queue the rest right after it, once it plays (last first, each
+      // after the previous one landed, so they keep their order).
+      const player = document.querySelector<
+        HTMLElement & { getVideoData?: () => { video_id?: string } }
+      >('#movie_player');
+      const playing = () =>
+        player?.getVideoData?.()?.video_id === first.videoId;
+      await waitFor(playing, 15_000);
+      await wait(1000);
+      let queued = 0;
+      for (const track of [...rest].reverse()) {
+        if (stale()) return;
+        this.showSpinner(
+          t(key('queueing'), {
+            done: String(queued),
+            total: String(rest.length),
+          }),
+        );
+        const before = queueLength();
+        this.player.playNext(track.videoId, parts.get(track.videoId)!);
+        await waitFor(() => queueLength() > before, QUEUE_WAIT);
+        queued++;
+      }
     } finally {
       if (run === this.run) this.hideSpinner();
     }

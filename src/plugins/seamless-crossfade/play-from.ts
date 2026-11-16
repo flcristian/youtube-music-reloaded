@@ -103,8 +103,6 @@ export interface Interval {
 
 /** Shortest part of a song that can be chosen, in seconds. */
 const MIN_INTERVAL = 5;
-/** Length of "Best part" when nothing narrower is selected, in seconds. */
-const BEST_PART_LENGTH = 120;
 
 /** How long to wait for the chosen song to load, in ms. */
 const ENSURE_TIMEOUT = 10_000;
@@ -241,7 +239,7 @@ export class PlayFrom {
   /** "Play from…" (play now): the next song that starts is the chosen one. */
   private playNow?: { interval: Interval; key: string; at: number };
   /** The playing song's chosen end, once it has started. */
-  private activeEnd?: { videoId: string; end: number };
+  private activePart?: { videoId: string; start: number; end?: number };
   private lastVideoId?: string;
   private video?: HTMLVideoElement;
   private modal?: HTMLElement;
@@ -252,6 +250,8 @@ export class PlayFrom {
     private readonly prepareCrossfade: (startAt: number) => void,
     /** "Choose a part before playing": clicks on play open the modal. */
     private readonly askOnPlay: () => boolean = () => false,
+    /** Length of "Best part" when nothing narrower is selected, in seconds. */
+    private readonly bestPartLength: () => number = () => 120,
   ) {}
 
   install() {
@@ -311,8 +311,24 @@ export class PlayFrom {
 
   /** Where the playing song should end (crossfading into the next). */
   intervalEnd(videoId: string | undefined) {
-    const active = this.activeEnd;
+    const active = this.activePart;
     return active && active.videoId === videoId ? active.end : undefined;
+  }
+
+  /** The part of the playing song that plays, if one was chosen. */
+  currentPart() {
+    const videoId = this.api.getVideoData()?.video_id;
+    const active = this.activePart;
+    return active && active.videoId === videoId ? { ...active } : undefined;
+  }
+
+  /** Move where the playing song ends; `undefined`: until the song's end. */
+  setPartEnd(end: number | undefined) {
+    const videoId = this.api.getVideoData()?.video_id;
+    if (!videoId) return;
+    const start =
+      this.activePart?.videoId === videoId ? this.activePart.start : 0;
+    this.activePart = { videoId, start, end };
   }
 
   /** When a queued song starts, jump to the chosen moment. */
@@ -331,10 +347,9 @@ export class PlayFrom {
     }
     const interval = found?.interval;
     if (interval) {
-      this.activeEnd =
-        interval.end === undefined ? undefined : { videoId, end: interval.end };
-    } else if (this.activeEnd?.videoId !== videoId) {
-      this.activeEnd = undefined;
+      this.activePart = { videoId, start: interval.start, end: interval.end };
+    } else if (this.activePart?.videoId !== videoId) {
+      this.activePart = undefined;
     }
     if (!found && this.bestParts.size) {
       // Something outside the best-parts playlist: the session is over.
@@ -583,7 +598,9 @@ export class PlayFrom {
       if (!length || !graph) return;
       const selected = endOrLength() - start;
       const seconds =
-        selected < length - 1 ? selected : Math.min(BEST_PART_LENGTH, length);
+        selected < length - 1
+          ? selected
+          : Math.min(this.bestPartLength(), length);
       start = bestPartStart(graph, length, seconds);
       const value = start + seconds;
       end = value >= length - 0.5 ? undefined : value;
@@ -684,7 +701,8 @@ export class PlayFrom {
     }
     if (interval.start >= 1 || interval.end !== undefined) {
       this.scheduled.set(videoId, interval);
-    } else {
+    } else if (!this.bestParts.has(videoId)) {
+      // Whole songs of a best-parts run stay in it (they keep it going).
       this.scheduled.delete(videoId);
     }
   }
@@ -712,8 +730,7 @@ export class PlayFrom {
     const seconds = interval.start;
     // Same song: just jump there.
     if (api.getVideoData()?.video_id === videoId) {
-      this.activeEnd =
-        interval.end === undefined ? undefined : { videoId, end: interval.end };
+      this.activePart = { videoId, start: interval.start, end: interval.end };
       api.seekTo(seconds);
       return;
     }

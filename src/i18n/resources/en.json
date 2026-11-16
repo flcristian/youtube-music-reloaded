@@ -819,6 +819,7 @@
         "loading": "Loading playlist…",
         "play": "Play best parts",
         "progress": "Finding the best parts… {{done}}/{{total}}",
+        "queueing": "Adding to the queue… {{done}}/{{total}}",
         "shuffle": "Shuffle best parts"
       },
       "description": "Crossfades on every song change: the song you leave keeps playing and fades out while the next one fades in. Reuses already-downloaded audio, no extra streams. Settings: Cmd+Shift+.",
@@ -826,7 +827,7 @@
       "play-from": {
         "add-to-queue": "Add to queue",
         "best-part": "Best part",
-        "best-part-help": "Select the part listeners replay most on YouTube (keeps the selected length, or 2 minutes)",
+        "best-part-help": "Select the part listeners replay most on YouTube (keeps the selected length, or uses \"Best part length\" from settings)",
         "best-part-loading": "Loading replay data…",
         "best-part-none": "No replay data for this song",
         "cancel": "Cancel",
@@ -838,6 +839,7 @@
       "settings": {
         "ask-on-play": "Choose a part before playing (clicking play opens \"Play from…\")",
         "auto": "Crossfade at the end of a song",
+        "best-part-length": "Best part length",
         "curve": {
           "label": "Fade curve",
           "equal-power": "Equal power",

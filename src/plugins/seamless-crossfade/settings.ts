@@ -15,6 +15,8 @@ export type SeamlessCrossfadeConfig = {
   jumpDuration: number;
   /** Clicking play on a song opens "Play from…" to choose a part first. */
   askOnPlay: boolean;
+  /** Length of a song's "best part", in seconds. */
+  bestPartLength: number;
 };
 
 export const defaultConfig: SeamlessCrossfadeConfig = {
@@ -26,7 +28,11 @@ export const defaultConfig: SeamlessCrossfadeConfig = {
   curve: 'equal-power',
   jumpDuration: 5,
   askOnPlay: false,
+  bestPartLength: 120,
 };
+
+export const MIN_PART_LENGTH = 30;
+export const MAX_PART_LENGTH = 300;
 
 export const MIN_DURATION = 0.5;
 export const MAX_DURATION = 20;

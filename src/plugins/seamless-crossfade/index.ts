@@ -84,12 +84,17 @@ export default createPlugin<
         (startAt) =>
           this.crossfader?.prepareJump(this.config.jumpDuration, startAt),
         () => this.config.askOnPlay,
+        () => this.config.bestPartLength,
       );
       this.playFrom.install();
       const parts = this.playFrom;
-      this.bestParts = new BestPartsPlaylist((entries) =>
-        parts.startBestParts(entries),
-      );
+      this.bestParts = new BestPartsPlaylist({
+        schedule: (entries) => parts.startBestParts(entries),
+        play: (videoId, interval) => parts.play(videoId, interval),
+        playNext: (videoId, interval) =>
+          parts.enqueueSong(videoId, interval, 'INSERT_AFTER_CURRENT_VIDEO'),
+        partLength: () => this.config.bestPartLength,
+      });
       this.bestParts.install();
       this.crossfader.scheduledStart = (videoId) =>
         this.playFrom?.scheduledStart(videoId);
@@ -108,6 +113,8 @@ export default createPlugin<
               ? 'INSERT_AFTER_CURRENT_VIDEO'
               : 'INSERT_AT_END',
           ),
+        currentPart: () => playFrom.currentPart(),
+        setPartEnd: (end) => playFrom.setPartEnd(end),
         getCrossfadeConfig: () => this.config,
         setCrossfadeConfig: (changes) => this.saveConfig?.(changes),
       });
