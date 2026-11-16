@@ -605,6 +605,10 @@
         "fetched-lyrics": "Versuri preluate de pe Genius"
       }
     },
+    "mcp-bridge": {
+      "description": "Permite lui Claude (prin serverul MCP) să controleze playerul, coada și pluginurile noastre și să citească playlisturile. Doar local (127.0.0.1), protejat cu token.",
+      "name": "Punte MCP"
+    },
     "music-together": {
       "description": "Împărtășește lista de redare cu alții. Când gazda va pune o piesă, toți ceilalți vor auzi aceeași melodie",
       "dialog": {
@@ -796,16 +800,28 @@
       }
     },
     "seamless-crossfade": {
+      "best-parts": {
+        "loading": "Se încarcă playlistul…",
+        "play": "Redă cele mai bune părți",
+        "progress": "Se caută cele mai bune părți… {{done}}/{{total}}",
+        "shuffle": "Amestecă cele mai bune părți"
+      },
       "description": "Crossfade la fiecare schimbare de piesă: piesa pe care o lași continuă și scade în volum, iar următoarea crește. Refolosește audio-ul deja descărcat, fără stream-uri în plus. Setări: Cmd+Shift+.",
       "name": "Seamless Crossfade",
       "play-from": {
         "add-to-queue": "Adaugă în coadă",
+        "best-part": "Cea mai bună parte",
+        "best-part-help": "Selectează partea reascultată cel mai des pe YouTube (păstrează lungimea selectată sau 2 minute)",
+        "best-part-loading": "Se încarcă datele de reascultare…",
+        "best-part-none": "Nu există date de reascultare pentru această melodie",
         "cancel": "Anulează",
         "confirm": "Redă {{range}}",
         "menu": "Redă de la…",
-        "play-next": "Redă următoarea"
+        "play-next": "Redă următoarea",
+        "play-now": "Redă acum"
       },
       "settings": {
+        "ask-on-play": "Alege partea înainte de redare (play deschide „Redă de la…”)",
         "auto": "Crossfade la finalul piesei",
         "curve": {
           "label": "Curba fade-ului",

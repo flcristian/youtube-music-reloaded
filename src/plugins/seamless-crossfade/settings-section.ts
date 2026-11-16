@@ -77,6 +77,12 @@ export const renderSettings = (
     onChange: (seconds) => save({ jumpDuration: clampDuration(seconds) }),
   });
 
+  const askOnPlay = createToggle({
+    label: t(key('ask-on-play')),
+    checked: config.askOnPlay,
+    onChange: (value) => save({ askOnPlay: value }),
+  });
+
   const curve = createChoice<FadeCurve>({
     label: t(key('curve.label')),
     value: config.curve,
@@ -94,6 +100,7 @@ export const renderSettings = (
     manualToggle.row,
     manualDuration.row,
     jumpDuration.row,
+    askOnPlay.row,
     curve.row,
   );
 };

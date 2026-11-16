@@ -13,6 +13,8 @@ export type SeamlessCrossfadeConfig = {
   curve: FadeCurve;
   /** Crossfade when using "Play from…" (song menu), in seconds. */
   jumpDuration: number;
+  /** Clicking play on a song opens "Play from…" to choose a part first. */
+  askOnPlay: boolean;
 };
 
 export const defaultConfig: SeamlessCrossfadeConfig = {
@@ -23,6 +25,7 @@ export const defaultConfig: SeamlessCrossfadeConfig = {
   manualDuration: 5,
   curve: 'equal-power',
   jumpDuration: 5,
+  askOnPlay: false,
 };
 
 export const MIN_DURATION = 0.5;

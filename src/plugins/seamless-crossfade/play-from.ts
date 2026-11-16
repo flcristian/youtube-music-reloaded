@@ -6,6 +6,8 @@ import { t } from '@/i18n';
 import { drawWaveform } from '@/plugins/waveform-seekbar/draw';
 import { loadPeaks } from '@/plugins/waveform-seekbar/peaks';
 
+import { bestPartStart, loadReplayGraph } from './best-part';
+
 import type { MusicPlayer } from '@/types/music-player';
 
 declare const ytcfg: { get: (key: string) => unknown };
@@ -30,7 +32,7 @@ const formatTime = (seconds: number) => {
 };
 
 /** Title, length and cover of any song, from YouTube Music's own API. */
-const fetchDetails = async (videoId: string): Promise<SongDetails> => {
+export const fetchDetails = async (videoId: string): Promise<SongDetails> => {
   const response = await fetch('/youtubei/v1/player?prettyPrint=false', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -76,7 +78,7 @@ const menuVideoId = (listbox: Element) => {
   return undefined;
 };
 
-type InsertPosition = 'INSERT_AFTER_CURRENT_VIDEO' | 'INSERT_AT_END';
+export type InsertPosition = 'INSERT_AFTER_CURRENT_VIDEO' | 'INSERT_AT_END';
 
 /** The menu's "Play next" or "Add to queue" item. */
 const queueItem = (listbox: Element, position: InsertPosition) =>
@@ -94,13 +96,15 @@ const queueItem = (listbox: Element, position: InsertPosition) =>
   }) as (HTMLElement & { data?: unknown }) | undefined;
 
 /** Part of a song to play, in song seconds; no `end`: until the end. */
-interface Interval {
+export interface Interval {
   start: number;
   end?: number;
 }
 
 /** Shortest part of a song that can be chosen, in seconds. */
 const MIN_INTERVAL = 5;
+/** Length of "Best part" when nothing narrower is selected, in seconds. */
+const BEST_PART_LENGTH = 120;
 
 /** How long to wait for the chosen song to load, in ms. */
 const ENSURE_TIMEOUT = 10_000;
@@ -116,6 +120,114 @@ const SETTLE_TIME = 1000;
 
 const ICON = 'M8 5v14l11-7z M3 3h2v18H3z';
 
+/** Events of a click that must not reach YouTube Music when intercepted. */
+const INTERCEPTED_EVENTS = [
+  'pointerdown',
+  'pointerup',
+  'mousedown',
+  'mouseup',
+  'click',
+] as const;
+
+type Rendered = HTMLElement & { data?: Record<string, unknown> };
+
+/** The "Play next" / "Add to queue" actions in a row's own menu data. */
+const rowQueueData = (data: Record<string, unknown> | undefined) => {
+  const result: Partial<Record<InsertPosition, unknown>> = {};
+  const items = (
+    (data?.menu as { menuRenderer?: { items?: unknown[] } } | undefined)
+      ?.menuRenderer?.items ?? []
+  ).map(
+    (item) =>
+      (item as { menuServiceItemRenderer?: unknown }).menuServiceItemRenderer,
+  );
+  for (const item of items) {
+    const position = (
+      item as
+        | {
+            serviceEndpoint?: {
+              queueAddEndpoint?: { queueInsertPosition?: InsertPosition };
+            };
+          }
+        | undefined
+    )?.serviceEndpoint?.queueAddEndpoint?.queueInsertPosition;
+    if (position) result[position] = item;
+  }
+  return result;
+};
+
+/** The song a click would start playing, if any. */
+const playTarget = (event: Event) => {
+  const path = event
+    .composedPath()
+    .filter((node): node is HTMLElement => node instanceof HTMLElement);
+  // Never the menu, like buttons or other controls inside a row.
+  if (
+    path.some((node) =>
+      ['YTMUSIC-MENU-RENDERER', 'YTMUSIC-LIKE-BUTTON-RENDERER'].includes(
+        node.tagName,
+      ),
+    )
+  ) {
+    return undefined;
+  }
+
+  const isRendered =
+    (tag: string) =>
+    (node: HTMLElement): node is Rendered =>
+      node.tagName === tag;
+  const row = path.find(isRendered('YTMUSIC-RESPONSIVE-LIST-ITEM-RENDERER'));
+  if (row) {
+    const onPlayButton = path.some(
+      (node) => node.tagName === 'YTMUSIC-PLAY-BUTTON-RENDERER',
+    );
+    const onTitle = path.some(
+      (node) =>
+        node instanceof HTMLAnchorElement &&
+        (node.getAttribute('href') ?? '').startsWith('watch?'),
+    );
+    if (!onPlayButton && !onTitle) return undefined;
+    const data = row.data;
+    const watchEndpoint = (
+      (
+        (
+          (data?.overlay as Record<string, unknown> | undefined)
+            ?.musicItemThumbnailOverlayRenderer as
+            | Record<string, unknown>
+            | undefined
+        )?.content as Record<string, unknown> | undefined
+      )?.musicPlayButtonRenderer as
+        | { playNavigationEndpoint?: { watchEndpoint?: WatchEndpoint } }
+        | undefined
+    )?.playNavigationEndpoint?.watchEndpoint;
+    const videoId =
+      (data?.playlistItemData as { videoId?: string } | undefined)?.videoId ??
+      watchEndpoint?.videoId;
+    if (!videoId) return undefined;
+    const anchor =
+      path.find((node) => node.tagName === 'YTMUSIC-PLAY-BUTTON-RENDERER') ??
+      row;
+    return { videoId, watchEndpoint, queueData: rowQueueData(data), anchor };
+  }
+
+  const queueItem = path.find(isRendered('YTMUSIC-PLAYER-QUEUE-ITEM'));
+  if (queueItem) {
+    const data = queueItem.data;
+    const videoId = data?.videoId as string | undefined;
+    if (!videoId) return undefined;
+    const watchEndpoint = (
+      data?.navigationEndpoint as { watchEndpoint?: WatchEndpoint } | undefined
+    )?.watchEndpoint;
+    return {
+      videoId,
+      watchEndpoint,
+      queueData: rowQueueData(data),
+      anchor: queueItem,
+    };
+  }
+  return undefined;
+};
+
 export class PlayFrom {
   private observer?: MutationObserver;
   private menuItem?: HTMLElement;
@@ -124,6 +236,8 @@ export class PlayFrom {
   private menuQueueData: Partial<Record<InsertPosition, unknown>> = {};
   /** Queued songs and the part of them to play (song seconds). */
   private readonly scheduled = new Map<string, Interval>();
+  /** Songs of a "best parts" playlist session that haven't played yet. */
+  private bestParts = new Set<string>();
   /** "Play from…" (play now): the next song that starts is the chosen one. */
   private playNow?: { interval: Interval; key: string; at: number };
   /** The playing song's chosen end, once it has started. */
@@ -136,9 +250,14 @@ export class PlayFrom {
   constructor(
     private readonly api: MusicPlayer,
     private readonly prepareCrossfade: (startAt: number) => void,
+    /** "Choose a part before playing": clicks on play open the modal. */
+    private readonly askOnPlay: () => boolean = () => false,
   ) {}
 
   install() {
+    for (const type of INTERCEPTED_EVENTS) {
+      window.addEventListener(type, this.onPlayClick, true);
+    }
     const container = document.querySelector('ytmusic-popup-container');
     if (!container) return;
     this.menuItem = this.createMenuItem();
@@ -217,12 +336,20 @@ export class PlayFrom {
     } else if (this.activeEnd?.videoId !== videoId) {
       this.activeEnd = undefined;
     }
+    if (!found && this.bestParts.size) {
+      // Something outside the best-parts playlist: the session is over.
+      this.endBestParts();
+    }
     if (!found || !interval) return;
     this.scheduled.delete(found.key);
+    this.bestParts.delete(found.key);
     this.ensurePosition(videoId, interval.start);
   };
 
   uninstall() {
+    for (const type of INTERCEPTED_EVENTS) {
+      window.removeEventListener(type, this.onPlayClick, true);
+    }
     this.observer?.disconnect();
     this.menuItem?.remove();
     this.closeModal();
@@ -231,6 +358,28 @@ export class PlayFrom {
       this.video?.removeEventListener(event, this.onSongProgress);
     }
   }
+
+  /**
+   * With "Choose a part before playing" on, a click that would play a song
+   * (a row's play button or title, a song in the queue) opens the modal
+   * instead. Runs in the capture phase so YouTube Music never sees it.
+   */
+  private readonly onPlayClick = (event: Event) => {
+    if (!this.askOnPlay()) return;
+    const target = playTarget(event);
+    if (!target) return;
+    // The playing song's own button pauses/resumes: leave it alone.
+    if (target.videoId === this.api.getVideoData()?.video_id) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (event.type !== 'click') return;
+    this.openModal(
+      target.videoId,
+      target.queueData,
+      target.watchEndpoint,
+      target.anchor,
+    ).catch(console.warn);
+  };
 
   private addToMenu() {
     const listbox = document.querySelector(
@@ -310,6 +459,10 @@ export class PlayFrom {
   private async openModal(
     videoId: string,
     queueData: Partial<Record<InsertPosition, unknown>>,
+    /** How to play it (e.g. the row's own endpoint, keeping its playlist). */
+    watchEndpoint?: WatchEndpoint,
+    /** Show as a small dropdown under this element (no cover). */
+    anchor?: HTMLElement,
   ) {
     this.closeModal();
     const host = document.createElement('play-from-modal');
@@ -319,11 +472,12 @@ export class PlayFrom {
       <style>${styles}</style>
       <div class="backdrop"></div>
       <div class="dialog" role="dialog" aria-modal="true">
-        <div class="cover"><img alt="" /></div>
+        ${anchor ? '' : '<div class="cover"><img alt="" /></div>'}
         <canvas class="waveform"></canvas>
         <div class="time"></div>
         <div class="buttons">
-          <button class="cancel"></button>
+          <button class="secondary best-part" disabled></button>
+          ${anchor ? '' : '<button class="cancel"></button>'}
           <button class="secondary queue-end"></button>
           <button class="secondary queue-next"></button>
           <button class="confirm"></button>
@@ -331,15 +485,20 @@ export class PlayFrom {
       </div>`;
     const $ = <T extends Element>(selector: string) =>
       root.querySelector<T>(selector)!;
-    const img = $<HTMLImageElement>('img');
+    if (anchor) host.classList.add('dropdown');
+    const img = root.querySelector<HTMLImageElement>('img');
     const canvas = $<HTMLCanvasElement>('canvas');
     const time = $<HTMLElement>('.time');
     const confirm = $<HTMLButtonElement>('.confirm');
-    $<HTMLButtonElement>('.cancel').textContent = t(key('cancel'));
+    const cancel = root.querySelector<HTMLButtonElement>('.cancel');
+    if (cancel) cancel.textContent = t(key('cancel'));
     const queueButtons: [HTMLButtonElement, InsertPosition][] = [
       [$<HTMLButtonElement>('.queue-next'), 'INSERT_AFTER_CURRENT_VIDEO'],
       [$<HTMLButtonElement>('.queue-end'), 'INSERT_AT_END'],
     ];
+    const bestPartButton = $<HTMLButtonElement>('.best-part');
+    bestPartButton.textContent = t(key('best-part'));
+    bestPartButton.title = t(key('best-part-loading'));
     queueButtons[0][0].textContent = t(key('play-next'));
     queueButtons[1][0].textContent = t(key('add-to-queue'));
 
@@ -350,6 +509,16 @@ export class PlayFrom {
     const interval = (): Interval => ({ start, end });
     const endOrLength = () => end ?? length;
     let peaks: Float32Array | undefined;
+    let graph: Awaited<ReturnType<typeof loadReplayGraph>>;
+    let graphLoaded = false;
+    const updateBestPart = () => {
+      bestPartButton.disabled = !length || !graph;
+      if (graphLoaded) {
+        bestPartButton.title = graph
+          ? t(key('best-part-help'))
+          : t(key('best-part-none'));
+      }
+    };
     const update = () => {
       drawWaveform(
         canvas,
@@ -360,11 +529,14 @@ export class PlayFrom {
       );
       const range = `${formatTime(start)} – ${formatTime(endOrLength())}`;
       time.textContent = `${range} / ${formatTime(length)}`;
-      confirm.textContent = t(key('confirm'), { range });
+      confirm.textContent = anchor
+        ? t(key('play-now'))
+        : t(key('confirm'), { range });
       confirm.disabled = !length;
       for (const [button, position] of queueButtons) {
         button.disabled = !length || !queueData[position];
       }
+      updateBestPart();
     };
 
     const timeAt = (event: PointerEvent) => {
@@ -406,14 +578,26 @@ export class PlayFrom {
       dragging = false;
     });
 
+    // Keeps the selection's length if it was narrowed, otherwise 2 minutes.
+    bestPartButton.addEventListener('click', () => {
+      if (!length || !graph) return;
+      const selected = endOrLength() - start;
+      const seconds =
+        selected < length - 1 ? selected : Math.min(BEST_PART_LENGTH, length);
+      start = bestPartStart(graph, length, seconds);
+      const value = start + seconds;
+      end = value >= length - 0.5 ? undefined : value;
+      update();
+    });
+
     const close = () => this.closeModal();
     const play = () => {
       if (!length) return;
       close();
-      this.play(videoId, interval());
+      this.play(videoId, interval(), watchEndpoint);
     };
     $('.backdrop').addEventListener('click', close);
-    $('.cancel').addEventListener('click', close);
+    cancel?.addEventListener('click', close);
     confirm.addEventListener('click', play);
     for (const [button, position] of queueButtons) {
       button.addEventListener('click', () => {
@@ -431,9 +615,19 @@ export class PlayFrom {
     });
 
     document.body.append(host);
+    if (anchor) placeDropdown($<HTMLElement>('.dialog'), anchor);
     $<HTMLElement>('.dialog').tabIndex = -1;
     $<HTMLElement>('.dialog').focus();
     update();
+
+    loadReplayGraph(videoId)
+      .then((loaded) => {
+        if (this.modal !== host) return;
+        graph = loaded;
+        graphLoaded = true;
+        updateBestPart();
+      })
+      .catch(() => {});
 
     // Not played recently: a hidden muted player loads it in the background.
     loadPeaks(videoId)
@@ -447,8 +641,10 @@ export class PlayFrom {
     const details = await fetchDetails(videoId);
     if (this.modal !== host) return;
     length = details.length;
-    if (details.thumbnail) img.src = details.thumbnail;
-    img.alt = details.title;
+    if (img) {
+      if (details.thumbnail) img.src = details.thumbnail;
+      img.alt = details.title;
+    }
     update();
   }
 
@@ -456,6 +652,24 @@ export class PlayFrom {
    * Add `videoId` to the queue with YouTube Music's own action, and play
    * only `interval` of it when its turn comes.
    */
+  /**
+   * Queue `videoId` without a menu (e.g. from the MCP bridge): builds the
+   * same "Play next" / "Add to queue" action the song menu has.
+   */
+  enqueueSong(videoId: string, interval: Interval, position: InsertPosition) {
+    this.enqueue(videoId, interval, {
+      serviceEndpoint: {
+        queueAddEndpoint: {
+          queueTarget: {
+            videoId,
+            onEmptyQueue: { watchEndpoint: { videoId } },
+          },
+          queueInsertPosition: position,
+        },
+      },
+    });
+  }
+
   private enqueue(videoId: string, interval: Interval, data: unknown) {
     const item = document.createElement(
       'ytmusic-menu-service-item-renderer',
@@ -475,8 +689,25 @@ export class PlayFrom {
     }
   }
 
+  /**
+   * Play only these parts of their songs while a playlist plays (replaces
+   * an earlier best-parts session).
+   */
+  startBestParts(parts: Map<string, Interval>) {
+    this.endBestParts();
+    for (const [videoId, interval] of parts) {
+      this.scheduled.set(videoId, interval);
+      this.bestParts.add(videoId);
+    }
+  }
+
+  private endBestParts() {
+    for (const videoId of this.bestParts) this.scheduled.delete(videoId);
+    this.bestParts.clear();
+  }
+
   /** Play `interval` of `videoId` now, crossfading from the current song. */
-  private play(videoId: string, interval: Interval) {
+  play(videoId: string, interval: Interval, endpoint?: WatchEndpoint) {
     const { api } = this;
     const seconds = interval.start;
     // Same song: just jump there.
@@ -499,7 +730,8 @@ export class PlayFrom {
       >('ytmusic-player-queue-item'),
     ].find((item) => item.data?.videoId === videoId);
     const watchEndpoint: WatchEndpoint = {
-      ...(queueItem?.data?.navigationEndpoint?.watchEndpoint ?? { videoId }),
+      ...(endpoint ??
+        queueItem?.data?.navigationEndpoint?.watchEndpoint ?? { videoId }),
       startTimeSeconds: Math.floor(seconds),
     };
 
@@ -551,6 +783,22 @@ export class PlayFrom {
   }
 }
 
+/** Put the dropdown under `anchor` (or above it if there's no room). */
+const placeDropdown = (dialog: HTMLElement, anchor: HTMLElement) => {
+  const rect = anchor.getBoundingClientRect();
+  const { offsetWidth: width, offsetHeight: height } = dialog;
+  const margin = 8;
+  let top = rect.bottom + 6;
+  if (top + height > window.innerHeight - margin) top = rect.top - height - 6;
+  top = Math.max(margin, top);
+  const left = Math.min(
+    window.innerWidth - width - margin,
+    Math.max(margin, rect.left),
+  );
+  dialog.style.top = `${top}px`;
+  dialog.style.left = `${left}px`;
+};
+
 const styles = `
   :host { position: fixed; inset: 0; z-index: 10000; font-family: Roboto, Arial, sans-serif; }
   .backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.6); }
@@ -577,5 +825,15 @@ const styles = `
   .secondary:hover { background: rgba(255, 255, 255, 0.18); }
   .secondary:disabled { opacity: 0.4; cursor: default; }
   .confirm { background: #fff; color: #000; }
+  .best-part { margin-right: auto; }
+  .best-part:disabled { opacity: 0.4; cursor: default; }
   .confirm:disabled { opacity: 0.5; cursor: default; }
+  :host(.dropdown) .backdrop { background: transparent; }
+  :host(.dropdown) .dialog {
+    transform: none; width: min(380px, calc(100vw - 16px)); padding: 14px;
+    border-radius: 10px;
+  }
+  :host(.dropdown) .waveform { margin-top: 0; height: 64px; }
+  :host(.dropdown) .buttons { margin-top: 12px; }
+  :host(.dropdown) button { padding: 8px 14px; font-size: 13px; }
 `;

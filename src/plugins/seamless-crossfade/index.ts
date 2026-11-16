@@ -1,7 +1,9 @@
 import { t } from '@/i18n';
 import { registerSettingsSection } from '@/plugins/utils/renderer/custom-settings';
+import { registerDjFeatures } from '@/plugins/utils/renderer/dj-registry';
 import { createPlugin } from '@/utils';
 
+import { BestPartsPlaylist } from './best-parts-playlist';
 import { Crossfader } from './crossfader';
 import { MirrorManager } from './mirror';
 import { PlayFrom } from './play-from';
@@ -21,7 +23,9 @@ export default createPlugin<
     api?: MusicPlayer;
     crossfader?: Crossfader;
     playFrom?: PlayFrom;
+    bestParts?: BestPartsPlaylist;
     unregisterSettings?: () => void;
+    saveConfig?: (changes: Partial<SeamlessCrossfadeConfig>) => void;
   },
   SeamlessCrossfadeConfig
 >({
@@ -47,11 +51,14 @@ export default createPlugin<
         id: 'seamless-crossfade',
         title: () => t('plugins.seamless-crossfade.name'),
         render: (container) =>
-          renderSettings(container, this.config, (changes) => {
-            this.config = { ...this.config, ...changes };
-            Promise.resolve(setConfig(changes)).catch(() => {});
-          }),
+          renderSettings(container, this.config, (changes) =>
+            this.saveConfig?.(changes),
+          ),
       });
+      this.saveConfig = (changes) => {
+        this.config = { ...this.config, ...changes };
+        Promise.resolve(setConfig(changes)).catch(() => {});
+      };
     },
 
     onConfigChange(newConfig) {
@@ -72,20 +79,46 @@ export default createPlugin<
       this.crossfader.attach();
 
       // "Play from…" in song menus.
-      this.playFrom = new PlayFrom(api, (startAt) =>
-        this.crossfader?.prepareJump(this.config.jumpDuration, startAt),
+      this.playFrom = new PlayFrom(
+        api,
+        (startAt) =>
+          this.crossfader?.prepareJump(this.config.jumpDuration, startAt),
+        () => this.config.askOnPlay,
       );
       this.playFrom.install();
+      const parts = this.playFrom;
+      this.bestParts = new BestPartsPlaylist((entries) =>
+        parts.startBestParts(entries),
+      );
+      this.bestParts.install();
       this.crossfader.scheduledStart = (videoId) =>
         this.playFrom?.scheduledStart(videoId);
       this.crossfader.intervalEnd = (videoId) =>
         this.playFrom?.intervalEnd(videoId);
+
+      // For the MCP bridge (and other plugins).
+      const playFrom = this.playFrom;
+      registerDjFeatures({
+        play: (videoId, interval) => playFrom.play(videoId, interval),
+        enqueue: (videoId, interval, position) =>
+          playFrom.enqueueSong(
+            videoId,
+            interval,
+            position === 'next'
+              ? 'INSERT_AFTER_CURRENT_VIDEO'
+              : 'INSERT_AT_END',
+          ),
+        getCrossfadeConfig: () => this.config,
+        setCrossfadeConfig: (changes) => this.saveConfig?.(changes),
+      });
     },
 
     stop() {
+      registerDjFeatures(undefined);
       this.unregisterSettings?.();
       this.crossfader?.detach();
       this.playFrom?.uninstall();
+      this.bestParts?.uninstall();
     },
   },
 });

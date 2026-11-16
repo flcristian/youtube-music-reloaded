@@ -1,0 +1,12 @@
+{
+  "name": "youtube-music-reloaded-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MCP server that controls YouTube Music Reloaded through its local MCP Bridge plugin",
+  "type": "module",
+  "main": "server.mjs",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^3.25.0"
+  }
+}
