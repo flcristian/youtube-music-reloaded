@@ -843,13 +843,15 @@
         "best-part-length": "Best part length",
         "curve": {
           "label": "Fade curve",
+          "exponential-out": "Linear in, exponential out",
           "equal-power": "Equal power",
           "linear": "Linear",
           "steep": "Steep"
         },
         "duration": "Duration",
         "jump": "Crossfade for \"Play from…\"",
-        "manual": "Crossfade when changing songs manually"
+        "manual": "Crossfade when changing songs manually",
+        "outro-steepness": "Outro steepness"
       }
     },
     "shortcuts": {

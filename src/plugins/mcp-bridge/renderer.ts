@@ -417,7 +417,8 @@ const createMethods = (api: MusicPlayer) => ({
     if (
       params.curve === 'equal-power' ||
       params.curve === 'linear' ||
-      params.curve === 'steep'
+      params.curve === 'steep' ||
+      params.curve === 'exponential-out'
     ) {
       changes.curve = params.curve;
     }

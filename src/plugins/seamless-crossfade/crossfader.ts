@@ -7,8 +7,8 @@ import {
 } from '@/plugins/waveform-seekbar/tempo';
 
 import {
-  curves,
-  type FadeCurve,
+  fadeFor,
+  type Fade,
   type SeamlessCrossfadeConfig,
 } from './settings';
 
@@ -23,6 +23,17 @@ const AUTO_SKIP_WINDOW = 1500;
 /** How long a requested "Play from…" may take to reach the player. */
 const JUMP_WINDOW = 5000;
 const TICK_MS = 30;
+/**
+ * Automatic crossfade: the outgoing song's mirror starts this many seconds
+ * before the skip, muted and kept in step with the player, so at the skip
+ * it only has to be unmuted (starting it then lags behind: the page is
+ * busy for a moment while the player changes songs).
+ */
+const PREROLL_LEAD = 1;
+/** Give up getting in step after this long and skip anyway, in ms. */
+const PREROLL_TIMEOUT = 1500;
+/** In step when this close, in seconds. */
+const PREROLL_TOLERANCE = 0.01;
 
 /**
  * Beat matching: the outgoing song's tempo is bent (pitch kept) by at most
@@ -169,7 +180,7 @@ export class Crossfader {
     /** ms of fade-in actually played (not counting pauses). */
     elapsed?: number;
     duration: number;
-    curve: FadeCurve;
+    curve: Fade;
   };
   private cancelFadeIn?: () => void;
   /** Paused by the user (as opposed to the player loading a new song). */
@@ -184,6 +195,10 @@ export class Crossfader {
   private beatSync?: BeatSync;
   /** Song whose next song's tempo was last requested, and that song. */
   private prefetched?: string;
+  /** How far the incoming song's fade-in is (0–1), once it has started. */
+  private incomingProgress?: number;
+  /** The outgoing mirror, playing muted ahead of an automatic skip. */
+  private preroll?: { audio: HTMLAudioElement; cancel: () => void };
 
   constructor(
     private readonly api: MusicPlayer,
@@ -279,6 +294,8 @@ export class Crossfader {
   }
 
   private onTeardown() {
+    const prerolled = this.takePreroll();
+    let tailStarted = false;
     try {
       const { video } = this;
       const auto = performance.now() - this.autoSkipAt < AUTO_SKIP_WINDOW;
@@ -339,6 +356,7 @@ export class Crossfader {
       const target = this.userVolume();
 
       this.mirrors.release();
+      tailStarted = true;
       const outgoing = this.playing;
       const tempo = outgoing && tempoCache.get(outgoing.videoId);
       this.beatSync =
@@ -358,12 +376,15 @@ export class Crossfader {
         startVolume,
         userVolumeAtStart: target,
         length: tailLength,
-        curve: settings.curve,
+        curve: fadeFor(settings),
         playbackRate: video.playbackRate,
       });
-      this.startFadeIn(target, fade, settings.curve, jump?.startAt);
+      this.startFadeIn(target, fade, fadeFor(settings), jump?.startAt);
     } catch (err) {
       console.warn('[seamless-crossfade]', err);
+    } finally {
+      // Prerolled but not used after all: stop it.
+      if (prerolled && !tailStarted) prerolled.pause();
     }
   }
 
@@ -375,7 +396,7 @@ export class Crossfader {
       startVolume: number;
       userVolumeAtStart: number;
       length: number;
-      curve: FadeCurve;
+      curve: Fade;
       playbackRate: number;
     },
   ) {
@@ -399,7 +420,8 @@ export class Crossfader {
     audio.playbackRate = options.playbackRate;
     // Bending its tempo to the next song's keeps its pitch.
     audio.preservesPitch = true;
-    audio.currentTime = options.time;
+    // Already playing in step (prerolled): don't restart it.
+    if (audio.paused) audio.currentTime = options.time;
     if (video.sinkId) {
       audio.setSinkId(video.sinkId).catch(() => {});
     }
@@ -411,12 +433,13 @@ export class Crossfader {
           ? this.userVolume() / options.userVolumeAtStart
           : 0;
       const value =
-        options.startVolume * scale * curves[options.curve].out(progress);
+        options.startVolume * scale * options.curve.out(progress);
       return Math.min(1, Math.max(0, value));
     };
 
     let elapsed = 0;
     let last = performance.now();
+    let progress = 0;
     audio.volume = volumeAt(0);
     audio.muted = video.muted;
     cancel = loop((now) => {
@@ -424,7 +447,8 @@ export class Crossfader {
       if (!audio.paused) elapsed += now - last;
       this.steer(audio);
       last = now;
-      const progress = Math.min(1, elapsed / 1000 / options.length);
+      const own = Math.min(1, elapsed / 1000 / options.length);
+      progress = Math.max(progress, this.outgoingProgress(options.curve, own));
       audio.muted = video.muted;
       audio.volume = volumeAt(progress);
       if (progress < 1 && !audio.ended) return true;
@@ -440,13 +464,14 @@ export class Crossfader {
   private startFadeIn(
     target: number,
     duration: number,
-    curve: FadeCurve,
+    curve: Fade,
     /** Stay silent until the new song is at this position (Play from…). */
     startAt?: number,
   ) {
     const { video } = this;
     this.target = target;
     this.fadeIn = { waited: 0, duration, curve };
+    this.incomingProgress = undefined;
     this.cancelFadeIn?.();
     this.holdVolume();
     setVolume(video, 0);
@@ -497,7 +522,8 @@ export class Crossfader {
       }
 
       const progress = Math.min(1, fadeIn.elapsed / 1000 / fadeIn.duration);
-      setVolume(video, this.userVolume() * curves[fadeIn.curve].in(progress));
+      this.incomingProgress = progress;
+      setVolume(video, this.userVolume() * fadeIn.curve.in(progress));
       if (progress < 1) return true;
       this.finishFadeIn();
       return false;
@@ -527,6 +553,8 @@ export class Crossfader {
     this.cancelFadeIn?.();
     this.cancelFadeIn = undefined;
     this.fadeIn = undefined;
+    // Cut short: outgoing songs go back to their own clock.
+    if ((this.incomingProgress ?? 0) < 1) this.incomingProgress = undefined;
     if (this.target === undefined) return;
     const target = this.target;
     this.target = undefined;
@@ -548,6 +576,17 @@ export class Crossfader {
     this.userPaused = false;
     for (const tail of this.tails) tail.resume();
   };
+
+  /**
+   * Where the outgoing fade is: its own clock, or (curves that follow the
+   * incoming song) the incoming song's progress, holding while that one
+   * is still silent (its own clock again if nothing comes in).
+   */
+  private outgoingProgress(curve: Fade, own: number) {
+    if (!curve.followsIncoming) return own;
+    if (this.incomingProgress !== undefined) return this.incomingProgress;
+    return this.fadeIn ? 0 : own;
+  }
 
   /**
    * The incoming song plays (still silent): skip it ahead by less than a
@@ -685,7 +724,7 @@ export class Crossfader {
     const minimumSong = chosenEnd === undefined ? fade * 2 : 0;
     if (end - songStart < minimumSong) return;
     const remaining = end - time;
-    if (remaining > fade || remaining < 0.5) return;
+    if (remaining > fade + PREROLL_LEAD || remaining < 0.5) return;
 
     const key = `${api.getVideoData()?.video_id}@${songStart.toFixed(1)}`;
     if (key === this.autoSkippedFor) return;
@@ -693,9 +732,66 @@ export class Crossfader {
     if (!mirror.covers(time, remaining - 0.3)) return;
 
     this.autoSkippedFor = key;
-    this.autoSkipAt = performance.now();
-    this.skip();
+    this.prerollThenSkip(mirror, end - fade);
   };
+
+  /**
+   * Start the outgoing song's mirror muted, get it in step with the player
+   * (catching up by playing a little faster or slower while muted), then
+   * skip once it's in step and the fade is due (`skipAt`, media time).
+   */
+  private prerollThenSkip(mirror: StreamMirror, skipAt: number) {
+    const { video } = this;
+    const { audio } = mirror;
+    this.takePreroll()?.pause();
+    audio.muted = true;
+    audio.volume = 0;
+    audio.preservesPitch = true;
+    audio.playbackRate = video.playbackRate;
+    audio.currentTime = video.currentTime;
+    audio.play().catch(() => {});
+    const started = performance.now();
+    const skip = () => {
+      cancel();
+      this.preroll = undefined;
+      audio.playbackRate = video.playbackRate;
+      this.autoSkipAt = performance.now();
+      this.skip();
+    };
+    const cancel = loop((now) => {
+      // Paused or moved meanwhile: drop it (the next timeupdate decides).
+      if (video.paused || video.seeking || this.mirrors.current !== mirror) {
+        this.takePreroll()?.pause();
+        this.autoSkippedFor = undefined;
+        return false;
+      }
+      const late = now - started > PREROLL_TIMEOUT;
+      const due = video.currentTime >= skipAt;
+      if (audio.paused || audio.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
+        if (late) skip();
+        return !late;
+      }
+      // Positive: the mirror is ahead.
+      const drift = audio.currentTime - video.currentTime;
+      const inStep = Math.abs(drift) < PREROLL_TOLERANCE;
+      if ((inStep && due) || late) {
+        skip();
+        return false;
+      }
+      audio.playbackRate =
+        video.playbackRate * (inStep ? 1 : 1 - clamp(drift * 3, 0.3));
+      return true;
+    });
+    this.preroll = { audio, cancel };
+  }
+
+  /** Stop getting a preroll in step; returns its audio if there was one. */
+  private takePreroll() {
+    const preroll = this.preroll;
+    this.preroll = undefined;
+    preroll?.cancel();
+    return preroll?.audio;
+  }
 
   /**
    * Go to the next song through the UI button: it uses YouTube Music's

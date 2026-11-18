@@ -1,4 +1,4 @@
-export type FadeCurve = 'equal-power' | 'linear' | 'steep';
+export type FadeCurve = 'equal-power' | 'linear' | 'steep' | 'exponential-out';
 
 export type SeamlessCrossfadeConfig = {
   enabled: boolean;
@@ -11,6 +11,11 @@ export type SeamlessCrossfadeConfig = {
   /** How long the song you leave keeps playing, in seconds. */
   manualDuration: number;
   curve: FadeCurve;
+  /**
+   * "Linear in, exponential out": how hard the outgoing song drops once
+   * the incoming one has volume (higher: faster).
+   */
+  outroSteepness: number;
   /** Crossfade when using "Play from…" (song menu), in seconds. */
   jumpDuration: number;
   /** Clicking play on a song opens "Play from…" to choose a part first. */
@@ -26,6 +31,7 @@ export const defaultConfig: SeamlessCrossfadeConfig = {
   manualEnabled: true,
   manualDuration: 5,
   curve: 'equal-power',
+  outroSteepness: 5,
   jumpDuration: 5,
   askOnPlay: false,
   bestPartLength: 120,
@@ -34,20 +40,31 @@ export const defaultConfig: SeamlessCrossfadeConfig = {
 export const MIN_PART_LENGTH = 30;
 export const MAX_PART_LENGTH = 300;
 
+export const MIN_STEEPNESS = 1;
+export const MAX_STEEPNESS = 10;
+
 export const MIN_DURATION = 0.5;
 export const MAX_DURATION = 20;
 
 export const clampDuration = (seconds: number) =>
   Math.min(MAX_DURATION, Math.max(MIN_DURATION, seconds));
 
+export interface Fade {
+  /** Volume multipliers for progress `p` in [0, 1]. */
+  in: (p: number) => number;
+  out: (p: number) => number;
+  /**
+   * The outgoing song follows the incoming one's progress (it stays up
+   * while the incoming one is still silent) instead of its own clock.
+   */
+  followsIncoming?: boolean;
+}
+
 /**
  * Volume multipliers for progress `p` in [0, 1]:
  * `in` for the incoming song, `out` for the outgoing one.
  */
-export const curves: Record<
-  FadeCurve,
-  { in: (p: number) => number; out: (p: number) => number }
-> = {
+export const curves: Record<Exclude<FadeCurve, 'exponential-out'>, Fade> = {
   // Constant perceived loudness: no dip in the middle.
   'equal-power': {
     in: (p) => Math.sin((p * Math.PI) / 2),
@@ -66,3 +83,22 @@ export const curves: Record<
     out: (p) => (1 - p) ** 3,
   },
 };
+
+/** e^(-k·p), scaled to go from 1 down to exactly 0. */
+const exponentialOut = (steepness: number) => {
+  const floor = Math.exp(-steepness);
+  return (p: number) =>
+    Math.max(0, (Math.exp(-steepness * p) - floor) / (1 - floor));
+};
+
+/** The fade for these settings. */
+export const fadeFor = (config: SeamlessCrossfadeConfig): Fade =>
+  config.curve === 'exponential-out'
+    ? {
+        // The new song comes in linearly; the old one drops away fast as
+        // soon as the new one has volume.
+        in: (p) => p,
+        out: exponentialOut(config.outroSteepness),
+        followsIncoming: true,
+      }
+    : curves[config.curve] ?? curves['equal-power'];

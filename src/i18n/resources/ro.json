@@ -828,13 +828,15 @@
         "best-part-length": "Lungimea celei mai bune părți",
         "curve": {
           "label": "Curba fade-ului",
+          "exponential-out": "Liniar la intrare, exponențial la ieșire",
           "equal-power": "Equal power",
           "linear": "Liniar",
           "steep": "Abrupt"
         },
         "duration": "Durată",
         "jump": "Crossfade pentru „Redă de la…”",
-        "manual": "Crossfade la schimbarea manuală a piesei"
+        "manual": "Crossfade la schimbarea manuală a piesei",
+        "outro-steepness": "Cât de repede scade piesa veche"
       }
     },
     "shortcuts": {

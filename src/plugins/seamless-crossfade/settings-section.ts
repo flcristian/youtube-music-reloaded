@@ -10,8 +10,10 @@ import {
   type FadeCurve,
   MAX_DURATION,
   MAX_PART_LENGTH,
+  MAX_STEEPNESS,
   MIN_DURATION,
   MIN_PART_LENGTH,
+  MIN_STEEPNESS,
   type SeamlessCrossfadeConfig,
 } from './settings';
 
@@ -95,6 +97,17 @@ export const renderSettings = (
     onChange: (seconds) => save({ bestPartLength: seconds }),
   });
 
+  const steepness = createSlider({
+    label: t(key('outro-steepness')),
+    value: config.outroSteepness,
+    min: MIN_STEEPNESS,
+    max: MAX_STEEPNESS,
+    step: 0.5,
+    unit: '',
+    onChange: (value) => save({ outroSteepness: value }),
+  });
+  steepness.setDisabled(config.curve !== 'exponential-out');
+
   const curve = createChoice<FadeCurve>({
     label: t(key('curve.label')),
     value: config.curve,
@@ -102,8 +115,12 @@ export const renderSettings = (
       { value: 'equal-power', label: t(key('curve.equal-power')) },
       { value: 'linear', label: t(key('curve.linear')) },
       { value: 'steep', label: t(key('curve.steep')) },
+      { value: 'exponential-out', label: t(key('curve.exponential-out')) },
     ],
-    onChange: (value) => save({ curve: value }),
+    onChange: (value) => {
+      steepness.setDisabled(value !== 'exponential-out');
+      save({ curve: value });
+    },
   });
 
   container.append(
@@ -115,5 +132,6 @@ export const renderSettings = (
     askOnPlay.row,
     bestPartLength.row,
     curve.row,
+    steepness.row,
   );
 };
