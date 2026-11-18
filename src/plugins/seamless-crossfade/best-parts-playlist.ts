@@ -128,7 +128,10 @@ export class BestPartsPlaylist {
   constructor(
     private readonly player: {
       /** Play these parts when their songs come up (replaces older ones). */
-      schedule: (parts: Map<string, Interval>) => void;
+      schedule: (
+        parts: Map<string, Interval>,
+        titles: Map<string, string>,
+      ) => void;
       /** Play a part now, crossfading. */
       play: (videoId: string, interval: Interval) => void;
       /** Insert a song right after the playing one. */
@@ -253,7 +256,10 @@ export class BestPartsPlaylist {
       await Promise.all(Array.from({ length: PARALLEL }, worker));
       if (stale()) return;
 
-      this.player.schedule(parts);
+      this.player.schedule(
+        parts,
+        new Map(tracks.map((track) => [track.videoId, track.title])),
+      );
       const [first, ...rest] = tracks;
       this.player.play(first.videoId, parts.get(first.videoId)!);
       // Queue the rest right after it, once it plays (last first, each

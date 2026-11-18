@@ -89,7 +89,7 @@ export default createPlugin<
       this.playFrom.install();
       const parts = this.playFrom;
       this.bestParts = new BestPartsPlaylist({
-        schedule: (entries) => parts.startBestParts(entries),
+        schedule: (entries, titles) => parts.startBestParts(entries, titles),
         play: (videoId, interval) => parts.play(videoId, interval),
         playNext: (videoId, interval) =>
           parts.enqueueSong(videoId, interval, 'INSERT_AFTER_CURRENT_VIDEO'),
@@ -98,6 +98,12 @@ export default createPlugin<
       this.bestParts.install();
       this.crossfader.scheduledStart = (videoId) =>
         this.playFrom?.scheduledStart(videoId);
+      this.crossfader.partStart = (videoId) => {
+        const part = this.playFrom?.currentPart();
+        return part && this.api?.getVideoData()?.video_id === videoId
+          ? part.start
+          : undefined;
+      };
       this.crossfader.intervalEnd = (videoId) =>
         this.playFrom?.intervalEnd(videoId);
 

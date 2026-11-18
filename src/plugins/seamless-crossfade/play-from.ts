@@ -101,6 +101,14 @@ export interface Interval {
   end?: number;
 }
 
+/** A title without case, accents or punctuation, for comparing. */
+const normalizeTitle = (title: string | undefined) =>
+  (title ?? '')
+    .normalize('NFD')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim();
+
 /** Shortest part of a song that can be chosen, in seconds. */
 const MIN_INTERVAL = 5;
 
@@ -236,6 +244,8 @@ export class PlayFrom {
   private readonly scheduled = new Map<string, Interval>();
   /** Songs of a "best parts" playlist session that haven't played yet. */
   private bestParts = new Set<string>();
+  /** Their titles (normalized), to recognize another version of a song. */
+  private readonly bestPartTitles = new Map<string, string>();
   /** "Play from…" (play now): the next song that starts is the chosen one. */
   private playNow?: { interval: Interval; key: string; at: number };
   /** The playing song's chosen end, once it has started. */
@@ -306,7 +316,36 @@ export class PlayFrom {
     for (const [key, interval] of this.scheduled) {
       if (ids.has(key)) return { key, interval };
     }
+    // Best-parts songs: the other version of a song has another id, but
+    // the same title.
+    const title = normalizeTitle(this.api.getVideoData()?.title);
+    if (title) {
+      for (const key of this.bestParts) {
+        const interval = this.scheduled.get(key);
+        if (interval && this.bestPartTitles.get(key) === title) {
+          return { key, interval };
+        }
+      }
+    }
     return undefined;
+  }
+
+  /** Whether a best-parts song that hasn't played yet is still queued. */
+  private bestPartsQueued() {
+    const ids = new Set<string>();
+    for (const item of document.querySelectorAll<
+      HTMLElement & { data?: unknown }
+    >('ytmusic-player-queue-item')) {
+      const entry =
+        item.closest<HTMLElement & { data?: unknown }>(
+          'ytmusic-playlist-panel-video-wrapper-renderer',
+        ) ?? item;
+      const json = JSON.stringify(entry.data ?? item.data ?? {});
+      for (const match of json.matchAll(/"videoId":"([\w-]+)"/g)) {
+        ids.add(match[1]);
+      }
+    }
+    return [...this.bestParts].some((videoId) => ids.has(videoId));
   }
 
   /** Where the playing song should end (crossfading into the next). */
@@ -351,8 +390,8 @@ export class PlayFrom {
     } else if (this.activePart?.videoId !== videoId) {
       this.activePart = undefined;
     }
-    if (!found && this.bestParts.size) {
-      // Something outside the best-parts playlist: the session is over.
+    if (!found && this.bestParts.size && !this.bestPartsQueued()) {
+      // None of its songs are left in the queue: the session is over.
       this.endBestParts();
     }
     if (!found || !interval) return;
@@ -711,17 +750,23 @@ export class PlayFrom {
    * Play only these parts of their songs while a playlist plays (replaces
    * an earlier best-parts session).
    */
-  startBestParts(parts: Map<string, Interval>) {
+  startBestParts(
+    parts: Map<string, Interval>,
+    titles: Map<string, string> = new Map(),
+  ) {
     this.endBestParts();
     for (const [videoId, interval] of parts) {
       this.scheduled.set(videoId, interval);
       this.bestParts.add(videoId);
+      const title = normalizeTitle(titles.get(videoId));
+      if (title) this.bestPartTitles.set(videoId, title);
     }
   }
 
   private endBestParts() {
     for (const videoId of this.bestParts) this.scheduled.delete(videoId);
     this.bestParts.clear();
+    this.bestPartTitles.clear();
   }
 
   /** Play `interval` of `videoId` now, crossfading from the current song. */

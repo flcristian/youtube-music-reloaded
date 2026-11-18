@@ -133,7 +133,7 @@ export default createPlugin<
       if (!source) return;
 
       this.loading.add(songId);
-      computePeaks(source)
+      computePeaks(source, songId)
         .then((peaks) => {
           rememberPeaks(songId, peaks);
           if (this.songId === songId) waveform.setPeaks(peaks);

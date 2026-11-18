@@ -1,3 +1,5 @@
+import { analyzeTempo, rememberTempo, tempoCache } from './tempo';
+
 /** Number of bars computed per song (resampled to the canvas width). */
 export const PEAK_COUNT = 1000;
 /** Decoding at a low rate keeps memory small; peaks don't need more. */
@@ -102,10 +104,14 @@ const MIN_LEVEL = 0.12;
  * then mapped on a dB scale relative to the song's own loudness range, so
  * quiet and loud sections of the same song are clearly different.
  */
-export const computePeaks = async (source: AudioSource) => {
+export const computePeaks = async (source: AudioSource, videoId?: string) => {
   const data = await download(source);
   const context = new OfflineAudioContext(1, 1, DECODE_RATE);
   const audio = await context.decodeAudioData(data);
+  // Its beats too, for crossfades (same decode).
+  if (videoId) {
+    rememberTempo(videoId, analyzeTempo(audio) ?? null);
+  }
 
   const channels = Array.from({ length: audio.numberOfChannels }, (_, i) =>
     audio.getChannelData(i),
@@ -164,7 +170,7 @@ export const loadPeaks = (videoId: string) => {
     .then(async (url) => {
       const source = url ? AudioSources.fromUrl(url) : undefined;
       if (!source) return undefined;
-      const peaks = await computePeaks(source);
+      const peaks = await computePeaks(source, videoId);
       rememberPeaks(videoId, peaks);
       return peaks;
     })
@@ -175,4 +181,18 @@ export const loadPeaks = (videoId: string) => {
     .finally(() => pending.delete(videoId));
   pending.set(videoId, job);
   return job;
+};
+
+/**
+ * The tempo of any song (analysed with its waveform). `undefined` if it
+ * can't be loaded or has no clear beat.
+ */
+export const loadTempo = async (videoId: string) => {
+  if (tempoCache.has(videoId)) return tempoCache.get(videoId) ?? undefined;
+  // Its waveform was kept but not its tempo: analyse it again.
+  if (peaksCache.has(videoId) && !pending.has(videoId)) {
+    peaksCache.delete(videoId);
+  }
+  await loadPeaks(videoId);
+  return tempoCache.get(videoId) ?? undefined;
 };

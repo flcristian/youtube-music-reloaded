@@ -1,3 +1,11 @@
+import { loadTempo } from '@/plugins/waveform-seekbar/peaks';
+import {
+  beatGrid,
+  tempoCache,
+  type BeatGrid,
+  type Tempo,
+} from '@/plugins/waveform-seekbar/tempo';
+
 import {
   curves,
   type FadeCurve,
@@ -15,6 +23,86 @@ const AUTO_SKIP_WINDOW = 1500;
 /** How long a requested "Play from…" may take to reach the player. */
 const JUMP_WINDOW = 5000;
 const TICK_MS = 30;
+
+/**
+ * Beat matching: the outgoing song's tempo is bent (pitch kept) by at most
+ * this share to follow the incoming one's; further apart, only the first
+ * beats are lined up.
+ */
+const MAX_BEND = 0.08;
+/** Extra bend used to pull drifting beats back together. */
+const MAX_NUDGE = 0.03;
+/** Bend per second of beat offset (how hard drift is corrected). */
+const NUDGE_GAIN = 0.5;
+/** Offsets below this (seconds) are left alone. */
+const BEAT_TOLERANCE = 0.008;
+/** How fast the outgoing song's speed may change, per second. */
+const BEND_SLEW = 0.05;
+/**
+ * Speed changes are applied at most this often (ms) and in steps of at
+ * least this size: each one costs the time-stretcher a small glitch.
+ */
+const BEND_INTERVAL = 500;
+const BEND_STEP = 0.005;
+/** Seeks the incoming song may take to land on the beat. */
+const ALIGN_ATTEMPTS = 3;
+
+/** Positive remainder. */
+const mod = (value: number, by: number) => ((value % by) + by) % by;
+/** `value` folded into -by/2 … by/2. */
+const wrap = (value: number, by: number) =>
+  mod(value + (by / 2), by) - (by / 2);
+const clamp = (value: number, limit: number) =>
+  Math.min(limit, Math.max(-limit, value));
+
+/** Seconds until the next beat of `grid`, at song time `time`. */
+const toNextBeat = (grid: BeatGrid, time: number) =>
+  mod(grid.beat - time, grid.period);
+
+/** The playing song's next song in the queue, if any. */
+const nextInQueue = () => {
+  type Renderer = { videoId?: string; selected?: boolean };
+  type Item = {
+    playlistPanelVideoRenderer?: Renderer;
+    playlistPanelVideoWrapperRenderer?: {
+      primaryRenderer?: { playlistPanelVideoRenderer?: Renderer };
+    };
+  };
+  const queue = document.querySelector<
+    HTMLElement & {
+      queue?: {
+        store?: { store?: { getState(): { queue?: { items?: Item[] } } } };
+      };
+    }
+  >('#queue');
+  const items = queue?.queue?.store?.store?.getState().queue?.items ?? [];
+  const song = (item: Item | undefined) =>
+    item?.playlistPanelVideoRenderer ??
+    item?.playlistPanelVideoWrapperRenderer?.primaryRenderer
+      ?.playlistPanelVideoRenderer;
+  const current = items.findIndex((item) => song(item)?.selected);
+  return current < 0 ? undefined : song(items[current + 1])?.videoId;
+};
+
+/**
+ * Lining up the beats of the song fading out (`audio`) with the one fading
+ * in (the player).
+ */
+interface BeatSync {
+  audio: HTMLAudioElement;
+  /** The outgoing song's tempo, and its media time minus song time. */
+  tempo: Tempo;
+  shift: number;
+  /** Its normal playback rate. */
+  baseRate: number;
+  /** Seeks made on the incoming song, and how far they moved it. */
+  attempts: number;
+  /** When its speed was last changed (performance.now()). */
+  bentAt: number;
+  skipped: number;
+  /** Once the incoming song plays: both beat grids, and the bend. */
+  lock?: { out: BeatGrid; in: BeatGrid; ratio: number; bend: boolean };
+}
 
 const volumeDesc = Object.getOwnPropertyDescriptor(
   HTMLMediaElement.prototype,
@@ -91,6 +179,11 @@ export class Crossfader {
   /** A "Play from…" in progress: crossfade with its own duration. */
   private jump?: { at: number; duration: number; startAt: number };
   private reloadChecked = false;
+  /** The song playing, and its media time minus song time. */
+  private playing?: { videoId: string; shift: number };
+  private beatSync?: BeatSync;
+  /** Song whose next song's tempo was last requested, and that song. */
+  private prefetched?: string;
 
   constructor(
     private readonly api: MusicPlayer,
@@ -133,6 +226,8 @@ export class Crossfader {
 
   /** Where a queued song will start (it's held silent until then). */
   scheduledStart?: (videoId: string | undefined) => number | undefined;
+  /** Where the playing song's chosen part starts, once it plays. */
+  partStart?: (videoId: string | undefined) => number | undefined;
   /** A chosen end for the playing song (song seconds), if any. */
   intervalEnd?: (videoId: string | undefined) => number | undefined;
 
@@ -244,6 +339,20 @@ export class Crossfader {
       const target = this.userVolume();
 
       this.mirrors.release();
+      const outgoing = this.playing;
+      const tempo = outgoing && tempoCache.get(outgoing.videoId);
+      this.beatSync =
+        outgoing && tempo
+          ? {
+              audio: mirror.audio,
+              tempo,
+              shift: outgoing.shift,
+              baseRate: video.playbackRate,
+              attempts: 0,
+              bentAt: 0,
+              skipped: 0,
+            }
+          : undefined;
       this.playTail(mirror, {
         time,
         startVolume,
@@ -280,6 +389,7 @@ export class Crossfader {
       },
       stop: () => {
         cancel?.();
+        if (this.beatSync?.audio === audio) this.beatSync = undefined;
         mirror.dispose();
         this.tails.delete(tail);
       },
@@ -287,6 +397,8 @@ export class Crossfader {
     this.tails.add(tail);
 
     audio.playbackRate = options.playbackRate;
+    // Bending its tempo to the next song's keeps its pitch.
+    audio.preservesPitch = true;
     audio.currentTime = options.time;
     if (video.sinkId) {
       audio.setSinkId(video.sinkId).catch(() => {});
@@ -310,6 +422,7 @@ export class Crossfader {
     cancel = loop((now) => {
       // The fade only advances while the outgoing song actually plays.
       if (!audio.paused) elapsed += now - last;
+      this.steer(audio);
       last = now;
       const progress = Math.min(1, elapsed / 1000 / options.length);
       audio.muted = video.muted;
@@ -347,16 +460,25 @@ export class Crossfader {
 
       // "Play from…" or a queued song with a chosen start: stay silent
       // until it has jumped there.
+      const videoId = this.api.getVideoData()?.video_id;
       const target =
-        startAt ?? this.scheduledStart?.(this.api.getVideoData()?.video_id);
+        startAt ??
+        this.scheduledStart?.(videoId) ??
+        this.partStart?.(videoId);
       const positioned =
         target === undefined || this.api.getCurrentTime() >= target - 1;
       const playing =
         !video.paused &&
+        !video.seeking &&
         video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA &&
         positioned;
 
       if (fadeIn.elapsed === undefined) {
+        // Still silent: first move it onto the outgoing song's beat.
+        if (playing && this.alignBeats()) {
+          setVolume(video, 0);
+          return true;
+        }
         if (playing) {
           fadeIn.elapsed = 0;
         } else {
@@ -427,10 +549,115 @@ export class Crossfader {
     for (const tail of this.tails) tail.resume();
   };
 
+  /**
+   * The incoming song plays (still silent): skip it ahead by less than a
+   * beat so its beats fall on the outgoing song's. True while a seek for
+   * that is under way (stay silent until it's done).
+   */
+  private alignBeats() {
+    const sync = this.beatSync;
+    if (!sync || sync.attempts >= ALIGN_ATTEMPTS || sync.audio.paused) {
+      return false;
+    }
+    if (!sync.lock) {
+      const videoId = this.api.getVideoData()?.video_id;
+      const incoming = videoId ? tempoCache.get(videoId) : undefined;
+      const inTime = this.api.getCurrentTime();
+      const outTime = sync.audio.currentTime - sync.shift;
+      const inGrid = incoming && beatGrid(incoming, inTime, inTime + 10);
+      const outGrid = beatGrid(sync.tempo, outTime - 6, outTime + 4);
+      if (!inGrid || !outGrid) {
+        this.beatSync = undefined;
+        return false;
+      }
+      // The closest of same, half and double time.
+      const ratio = [0.5, 1, 2]
+        .map((times) => (outGrid.period * times) / inGrid.period)
+        .reduce((a, b) => (Math.abs(b - 1) < Math.abs(a - 1) ? b : a));
+      sync.lock = {
+        out: outGrid,
+        in: inGrid,
+        ratio,
+        bend: Math.abs(ratio - 1) <= MAX_BEND,
+      };
+    }
+    const { lock } = sync;
+    const rate = sync.audio.playbackRate / sync.baseRate;
+    const inTime = this.api.getCurrentTime();
+    const outTime = sync.audio.currentTime - sync.shift;
+    // The outgoing song's beats as they will play (bent or not).
+    const outPeriod = lock.out.period / (lock.bend ? lock.ratio : rate);
+    const grid = Math.min(lock.in.period, outPeriod);
+    const delta = mod(
+      toNextBeat(lock.in, inTime) - (toNextBeat(lock.out, outTime) / rate),
+      grid,
+    );
+    // Close enough, or it would skip more than about a beat in all.
+    if (delta < 0.015 || grid - delta < 0.015) return false;
+    if (sync.skipped + delta > grid * 1.25) return false;
+    sync.attempts++;
+    sync.skipped += delta;
+    this.video.currentTime += delta;
+    return true;
+  }
+
+  /**
+   * Keep the outgoing song on the incoming one's beat: play it at the
+   * incoming song's tempo (when close enough), a little faster or slower
+   * while its beats drift ahead or behind.
+   */
+  private steer(audio: HTMLAudioElement) {
+    const sync = this.beatSync;
+    const lock = sync?.lock;
+    if (!sync || sync.audio !== audio || !lock?.bend) return;
+    if (audio.paused || this.video.paused || this.video.seeking) return;
+    const now = performance.now();
+    if (now - sync.bentAt < BEND_INTERVAL) return;
+    const seconds = sync.bentAt ? (now - sync.bentAt) / 1000 : BEND_INTERVAL / 1000;
+    const rate = audio.playbackRate / sync.baseRate;
+    const grid = Math.min(lock.in.period, lock.out.period / lock.ratio);
+    const outTime = audio.currentTime - sync.shift;
+    const inTime = this.api.getCurrentTime();
+    // Positive: its beat comes later than the incoming one's (speed up).
+    let offset = wrap(
+      (toNextBeat(lock.out, outTime) / rate) - toNextBeat(lock.in, inTime),
+      grid,
+    );
+    if (Math.abs(offset) < BEAT_TOLERANCE) offset = 0;
+    const wanted = lock.ratio * (1 + clamp(offset * NUDGE_GAIN, MAX_NUDGE));
+    const next = rate + clamp(wanted - rate, BEND_SLEW * seconds);
+    // Not for tiny changes (except to land exactly on the tempo).
+    if (Math.abs(next - rate) < Math.min(BEND_STEP, Math.abs(wanted - rate))) {
+      return;
+    }
+    if (Math.abs(next - rate) < 0.0005) return;
+    sync.bentAt = now;
+    audio.playbackRate = sync.baseRate * next;
+  }
+
+  /**
+   * Remember the playing song (for the next crossfade) and have the next
+   * song's tempo ready by then.
+   */
+  private notePlaying() {
+    const { video, api } = this;
+    const videoId = api.getVideoData()?.video_id;
+    if (!videoId) return;
+    this.playing = {
+      videoId,
+      shift: video.currentTime - api.getCurrentTime(),
+    };
+    const next = nextInQueue();
+    if (!next || next === this.prefetched) return;
+    this.prefetched = next;
+    loadTempo(next).catch(() => {});
+  }
+
   /** Automatic crossfade: skip `autoDuration` seconds before the song ends. */
   private readonly onTimeUpdate = () => {
     const { video, api } = this;
     if (video.paused) return;
+    this.notePlaying();
 
     const settings = this.getSettings();
     const chosenEnd = this.intervalEnd?.(api.getVideoData()?.video_id);
