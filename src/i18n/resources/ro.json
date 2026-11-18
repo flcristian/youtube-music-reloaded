@@ -805,7 +805,8 @@
         "play": "Redă cele mai bune părți",
         "progress": "Se caută cele mai bune părți… {{done}}/{{total}}",
         "queueing": "Se adaugă în coadă… {{done}}/{{total}}",
-        "shuffle": "Amestecă cele mai bune părți"
+        "shuffle": "Amestecă cele mai bune părți",
+        "shuffle-play": "Amestecă"
       },
       "description": "Crossfade la fiecare schimbare de piesă: piesa pe care o lași continuă și scade în volum, iar următoarea crește. Refolosește audio-ul deja descărcat, fără stream-uri în plus. Setări: Cmd+Shift+.",
       "name": "Seamless Crossfade",

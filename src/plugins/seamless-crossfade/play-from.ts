@@ -332,20 +332,21 @@ export class PlayFrom {
 
   /** Whether a best-parts song that hasn't played yet is still queued. */
   private bestPartsQueued() {
-    const ids = new Set<string>();
-    for (const item of document.querySelectorAll<
-      HTMLElement & { data?: unknown }
-    >('ytmusic-player-queue-item')) {
-      const entry =
-        item.closest<HTMLElement & { data?: unknown }>(
-          'ytmusic-playlist-panel-video-wrapper-renderer',
-        ) ?? item;
-      const json = JSON.stringify(entry.data ?? item.data ?? {});
-      for (const match of json.matchAll(/"videoId":"([\w-]+)"/g)) {
-        ids.add(match[1]);
+    // The queue's own data (its list isn't drawn while the player page is
+    // closed).
+    const queue = document.querySelector<
+      HTMLElement & {
+        queue?: {
+          store?: { store?: { getState(): { queue?: { items?: unknown } } } };
+        };
       }
-    }
-    return [...this.bestParts].some((videoId) => ids.has(videoId));
+    >('#queue');
+    const json = JSON.stringify(
+      queue?.queue?.store?.store?.getState().queue?.items ?? [],
+    );
+    return [...this.bestParts].some((videoId) =>
+      json.includes(`"${videoId}"`),
+    );
   }
 
   /** Where the playing song should end (crossfading into the next). */

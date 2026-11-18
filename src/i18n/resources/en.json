@@ -820,7 +820,8 @@
         "play": "Play best parts",
         "progress": "Finding the best parts… {{done}}/{{total}}",
         "queueing": "Adding to the queue… {{done}}/{{total}}",
-        "shuffle": "Shuffle best parts"
+        "shuffle": "Shuffle best parts",
+        "shuffle-play": "Shuffle play"
       },
       "description": "Crossfades on every song change: the song you leave keeps playing and fades out while the next one fades in. Reuses already-downloaded audio, no extra streams. Settings: Cmd+Shift+.",
       "name": "Seamless Crossfade",

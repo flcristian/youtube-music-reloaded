@@ -51,6 +51,76 @@ const menuPlaylist = (listbox: Element) => {
   return undefined;
 };
 
+type QueueItem = Record<string, unknown>;
+/** The player's queue: its store and the actions its own UI sends. */
+type QueueElement = HTMLElement & {
+  dispatch?: (action: { type: string; payload?: unknown }) => void;
+  queue?: {
+    store?: {
+      store?: {
+        getState(): {
+          queue?: {
+            items?: QueueItem[];
+            nextQueueItemId?: unknown;
+            queueContextParams?: string;
+          };
+        };
+      };
+    };
+  };
+};
+const queueElement = () => document.querySelector<QueueElement>('#queue');
+const queueState = () => queueElement()?.queue?.store?.store?.getState().queue;
+
+const isSelected = (item: QueueItem) => {
+  const wrapper = item.playlistPanelVideoWrapperRenderer as
+    | { primaryRenderer?: { playlistPanelVideoRenderer?: { selected?: boolean } } }
+    | undefined;
+  const own = item.playlistPanelVideoRenderer as
+    | { selected?: boolean }
+    | undefined;
+  const video = own ?? wrapper?.primaryRenderer?.playlistPanelVideoRenderer;
+  return video?.selected === true;
+};
+
+/**
+ * Make the queue the playing song followed by `videoIds` only (whatever
+ * followed it is dropped), in one go. False if the queue can't be changed
+ * this way.
+ */
+const replaceUpNext = async (videoIds: string[]) => {
+  const queue = queueElement();
+  const state = queueState();
+  if (!queue?.dispatch || !state?.items) return false;
+  const json = await innertube('music/get_queue', {
+    queueContextParams: state.queueContextParams,
+    videoIds,
+  });
+  const items = (
+    (json.queueDatas as { content?: unknown }[] | undefined) ?? []
+  )
+    .map((data) => data.content)
+    .filter(Boolean);
+  if (!items.length) return false;
+  const all = queueState()?.items ?? [];
+  const current = all.findIndex(isSelected);
+  if (current < 0) return false;
+  for (let i = all.length - 1; i > current; i--) {
+    queue.dispatch({ type: 'REMOVE_ITEM', payload: i });
+  }
+  queue.dispatch({
+    type: 'ADD_ITEMS',
+    payload: {
+      nextQueueItemId: queueState()?.nextQueueItemId,
+      index: current + 1,
+      items,
+      shuffleEnabled: false,
+      shouldAssignIds: true,
+    },
+  });
+  return true;
+};
+
 /** Fisher–Yates shuffle (in place). */
 const shuffled = <T>(items: T[]) => {
   for (let i = items.length - 1; i > 0; i--) {
@@ -145,8 +215,14 @@ export class BestPartsPlaylist {
     const container = document.querySelector('ytmusic-popup-container');
     if (!container) return;
     this.items = [
-      this.createItem(PLAY_ICON, t(key('play')), false),
-      this.createItem(SHUFFLE_ICON, t(key('shuffle')), true),
+      // YouTube Music no longer has its own in this menu.
+      this.createItem(SHUFFLE_ICON, t(key('shuffle-play')), () =>
+        this.shufflePlay(),
+      ),
+      this.createItem(PLAY_ICON, t(key('play')), () => this.startRun(false)),
+      this.createItem(SHUFFLE_ICON, t(key('shuffle')), () =>
+        this.startRun(true),
+      ),
     ];
     this.observer = new MutationObserver(() => this.addToMenu());
     this.observer.observe(container, { childList: true, subtree: true });
@@ -171,14 +247,39 @@ export class BestPartsPlaylist {
       return;
     }
     this.playlistId = playlistId;
-    const [play, shuffle] = this.items;
-    if (play.parentElement === listbox && play.nextElementSibling === shuffle) {
-      return;
-    }
-    listbox.prepend(play, shuffle);
+    const [first, ...others] = this.items;
+    const inPlace =
+      first.parentElement === listbox &&
+      others.every(
+        (item, i) => item.previousElementSibling === this.items[i],
+      );
+    if (inPlace) return;
+    listbox.prepend(...this.items);
   }
 
-  private createItem(icon: string, label: string, shuffle: boolean) {
+  private startRun(shuffle: boolean) {
+    const playlistId = this.playlistId;
+    if (playlistId) this.start(playlistId, shuffle).catch(console.warn);
+  }
+
+  /** The whole playlist, shuffled (YouTube Music's own shuffled play). */
+  private shufflePlay() {
+    const playlistId = this.playlistId;
+    if (!playlistId) return;
+    document.querySelector('ytmusic-app')?.dispatchEvent(
+      new CustomEvent('yt-navigate', {
+        bubbles: true,
+        composed: true,
+        detail: {
+          endpoint: {
+            watchPlaylistEndpoint: { playlistId, params: 'wAEB8gECKAE%3D' },
+          },
+        },
+      }),
+    );
+  }
+
+  private createItem(icon: string, label: string, action: () => void) {
     const item = document.createElement('div');
     item.setAttribute('role', 'option');
     item.tabIndex = -1;
@@ -206,13 +307,12 @@ export class BestPartsPlaylist {
       item.style.background = '';
     });
     item.addEventListener('click', () => {
-      const playlistId = this.playlistId;
       document
         .querySelector<HTMLElement & { close?: () => void }>(
           'ytmusic-popup-container tp-yt-iron-dropdown',
         )
         ?.close?.();
-      if (playlistId) this.start(playlistId, shuffle).catch(console.warn);
+      action();
     });
     return item;
   }
@@ -271,6 +371,16 @@ export class BestPartsPlaylist {
         player?.getVideoData?.()?.video_id === first.videoId;
       await waitFor(playing, 15_000);
       await wait(1000);
+      if (stale() || !rest.length) return;
+      // All at once, in place of what followed (one at a time, a part
+      // could end mid-way and other songs would play in between).
+      this.showSpinner(
+        t(key('queueing'), { done: '0', total: String(rest.length) }),
+      );
+      const replaced = await replaceUpNext(
+        rest.map((track) => track.videoId),
+      ).catch(() => false);
+      if (replaced || stale()) return;
       let queued = 0;
       for (const track of [...rest].reverse()) {
         if (stale()) return;
