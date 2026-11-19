@@ -22,6 +22,10 @@ export type SeamlessCrossfadeConfig = {
   askOnPlay: boolean;
   /** Length of a song's "best part", in seconds. */
   bestPartLength: number;
+  /** Songs a "Play/Shuffle best parts" run plays. */
+  bestPartsSongs: number;
+  /** "Play/Shuffle best parts" plays the whole playlist. */
+  bestPartsAll: boolean;
 };
 
 export const defaultConfig: SeamlessCrossfadeConfig = {
@@ -35,10 +39,15 @@ export const defaultConfig: SeamlessCrossfadeConfig = {
   jumpDuration: 5,
   askOnPlay: false,
   bestPartLength: 120,
+  bestPartsSongs: 50,
+  bestPartsAll: false,
 };
 
 export const MIN_PART_LENGTH = 30;
 export const MAX_PART_LENGTH = 300;
+
+export const MIN_SONGS = 10;
+export const MAX_SONGS = 1000;
 
 export const MIN_STEEPNESS = 1;
 export const MAX_STEEPNESS = 10;

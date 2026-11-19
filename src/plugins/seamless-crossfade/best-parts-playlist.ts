@@ -1,6 +1,6 @@
 /**
  * "Play best parts" / "Shuffle best parts" in a playlist's (or album's)
- * menu: plays up to `MAX_SONGS` of its songs (in order, or shuffled), each
+ * menu: plays its songs (all, or as many as set; in order, or shuffled), each
  * only for its best part (see `best-part.ts`).
  */
 import { t } from '@/i18n';
@@ -15,8 +15,6 @@ import { bestPartStart, loadReplayGraph } from './best-part';
 
 import type { Interval } from './play-from';
 
-/** Songs per run: keeps requests to YouTube well under any rate limit. */
-const MAX_SONGS = 50;
 /** Songs whose replay data is fetched at the same time. */
 const PARALLEL = 6;
 /** How long to wait for one song to show up in the queue. */
@@ -208,6 +206,8 @@ export class BestPartsPlaylist {
       playNext: (videoId: string, interval: Interval) => void;
       /** Length of each song's part, in seconds. */
       partLength: () => number;
+      /** Songs per run (`undefined`: the whole playlist). */
+      songCount: () => number | undefined;
     },
   ) {}
 
@@ -328,7 +328,10 @@ export class BestPartsPlaylist {
       const unique = [
         ...new Map(all.map((track) => [track.videoId, track])).values(),
       ];
-      const tracks = (shuffle ? shuffled(unique) : unique).slice(0, MAX_SONGS);
+      const tracks = (shuffle ? shuffled(unique) : unique).slice(
+        0,
+        this.player.songCount() ?? unique.length,
+      );
       if (!tracks.length) throw new Error('Empty playlist');
 
       const parts = new Map<string, Interval>();

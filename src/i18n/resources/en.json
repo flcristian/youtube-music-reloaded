@@ -841,6 +841,8 @@
         "ask-on-play": "Choose a part before playing (clicking play opens \"Play from…\")",
         "auto": "Crossfade at the end of a song",
         "best-part-length": "Best part length",
+        "best-parts-all": "Best parts: whole playlist",
+        "best-parts-songs": "Best parts: songs per run",
         "curve": {
           "label": "Fade curve",
           "exponential-out": "Linear in, exponential out",

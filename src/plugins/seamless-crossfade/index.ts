@@ -94,6 +94,8 @@ export default createPlugin<
         playNext: (videoId, interval) =>
           parts.enqueueSong(videoId, interval, 'INSERT_AFTER_CURRENT_VIDEO'),
         partLength: () => this.config.bestPartLength,
+        songCount: () =>
+          this.config.bestPartsAll ? undefined : this.config.bestPartsSongs,
       });
       this.bestParts.install();
       this.crossfader.scheduledStart = (videoId) =>

@@ -819,10 +819,20 @@ export class PlayFrom {
     const { api } = this;
     const started = performance.now();
     let settledSince: number | undefined;
-    const timer = setInterval(() => {
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Stops this check only (never a newer one), and for good even if the
+    // page's timers misbehave.
+    const stop = () => {
+      stopped = true;
+      clearTimeout(timer);
+      if (this.cancelEnsure === stop) this.cancelEnsure = undefined;
+    };
+    const check = () => {
+      if (stopped) return;
       const now = performance.now();
       if (now - started > ENSURE_TIMEOUT) {
-        this.cancelEnsure?.();
+        stop();
         return;
       }
       const video = document.querySelector('video');
@@ -830,19 +840,22 @@ export class PlayFrom {
         video &&
         !video.paused &&
         video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA;
-      if (api.getVideoData()?.video_id !== videoId || !playing) return;
-      if (!nearStart(api.getCurrentTime(), seconds)) {
-        api.seekTo(seconds);
-        settledSince = undefined;
-      } else {
-        settledSince ??= now;
-        if (now - settledSince > SETTLE_TIME) this.cancelEnsure?.();
+      if (api.getVideoData()?.video_id === videoId && playing) {
+        if (!nearStart(api.getCurrentTime(), seconds)) {
+          api.seekTo(seconds);
+          settledSince = undefined;
+        } else {
+          settledSince ??= now;
+          if (now - settledSince > SETTLE_TIME) {
+            stop();
+            return;
+          }
+        }
       }
-    }, 50);
-    this.cancelEnsure = () => {
-      clearInterval(timer);
-      this.cancelEnsure = undefined;
+      timer = setTimeout(check, 50);
     };
+    this.cancelEnsure = stop;
+    timer = setTimeout(check, 50);
   }
 }
 

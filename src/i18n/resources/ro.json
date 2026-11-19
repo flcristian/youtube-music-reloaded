@@ -826,6 +826,8 @@
         "ask-on-play": "Alege partea înainte de redare (play deschide „Redă de la…”)",
         "auto": "Crossfade la finalul piesei",
         "best-part-length": "Lungimea celei mai bune părți",
+        "best-parts-all": "Cele mai bune părți: tot playlistul",
+        "best-parts-songs": "Cele mai bune părți: câte piese",
         "curve": {
           "label": "Curba fade-ului",
           "exponential-out": "Liniar la intrare, exponențial la ieșire",

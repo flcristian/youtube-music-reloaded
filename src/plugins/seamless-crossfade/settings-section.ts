@@ -10,9 +10,11 @@ import {
   type FadeCurve,
   MAX_DURATION,
   MAX_PART_LENGTH,
+  MAX_SONGS,
   MAX_STEEPNESS,
   MIN_DURATION,
   MIN_PART_LENGTH,
+  MIN_SONGS,
   MIN_STEEPNESS,
   type SeamlessCrossfadeConfig,
 } from './settings';
@@ -97,6 +99,24 @@ export const renderSettings = (
     onChange: (seconds) => save({ bestPartLength: seconds }),
   });
 
+  const bestPartsSongs = createSlider({
+    label: t(key('best-parts-songs')),
+    value: config.bestPartsSongs,
+    min: MIN_SONGS,
+    max: MAX_SONGS,
+    step: 10,
+    onChange: (songs) => save({ bestPartsSongs: songs }),
+  });
+  bestPartsSongs.setDisabled(config.bestPartsAll);
+  const bestPartsAll = createToggle({
+    label: t(key('best-parts-all')),
+    checked: config.bestPartsAll,
+    onChange: (all) => {
+      bestPartsSongs.setDisabled(all);
+      save({ bestPartsAll: all });
+    },
+  });
+
   const steepness = createSlider({
     label: t(key('outro-steepness')),
     value: config.outroSteepness,
@@ -131,6 +151,8 @@ export const renderSettings = (
     jumpDuration.row,
     askOnPlay.row,
     bestPartLength.row,
+    bestPartsAll.row,
+    bestPartsSongs.row,
     curve.row,
     steepness.row,
   );
