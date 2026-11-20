@@ -202,7 +202,7 @@ export class Crossfader {
 
   constructor(
     private readonly api: MusicPlayer,
-    private readonly video: HTMLVideoElement,
+    private video: HTMLVideoElement,
     private readonly mirrors: MirrorManager,
     private readonly getSettings: () => SeamlessCrossfadeConfig,
   ) {}
@@ -216,6 +216,14 @@ export class Crossfader {
     this.hookTeardown();
     this.userPaused = video.paused;
     if (!video.paused) this.ensureMirrored();
+  }
+
+  /** Move onto a new <video> element (YouTube Music replaced it). */
+  setVideo(video: HTMLVideoElement) {
+    if (video === this.video) return;
+    this.detach();
+    this.video = video;
+    this.attach();
   }
 
   detach() {

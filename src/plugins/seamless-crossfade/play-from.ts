@@ -274,11 +274,19 @@ export class PlayFrom {
     this.observer = new MutationObserver(() => this.addToMenu());
     this.observer.observe(container, { childList: true, subtree: true });
 
-    this.video = document.querySelector('video') ?? undefined;
     this.lastVideoId = this.api.getVideoData()?.video_id;
+    const video = document.querySelector('video');
+    if (video) this.setVideo(video);
+  }
+
+  /** Listen to a new <video> element (YouTube Music replaced it). */
+  setVideo(video: HTMLVideoElement) {
+    if (video === this.video) return;
     for (const event of ['loadeddata', 'playing', 'timeupdate']) {
-      this.video?.addEventListener(event, this.onSongProgress);
+      this.video?.removeEventListener(event, this.onSongProgress);
+      video.addEventListener(event, this.onSongProgress);
     }
+    this.video = video;
   }
 
   /** Start position for a queued song, while it is waiting to start. */

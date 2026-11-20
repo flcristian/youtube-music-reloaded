@@ -1,6 +1,7 @@
 import { t } from '@/i18n';
 import { registerSettingsSection } from '@/plugins/utils/renderer/custom-settings';
 import { registerDjFeatures } from '@/plugins/utils/renderer/dj-registry';
+import { watchVideo } from '@/plugins/utils/renderer/video-watcher';
 import { createPlugin } from '@/utils';
 
 import { BestPartsPlaylist } from './best-parts-playlist';
@@ -26,6 +27,7 @@ export default createPlugin<
     bestParts?: BestPartsPlaylist;
     unregisterSettings?: () => void;
     saveConfig?: (changes: Partial<SeamlessCrossfadeConfig>) => void;
+    unwatchVideo?: () => void;
   },
   SeamlessCrossfadeConfig
 >({
@@ -126,9 +128,15 @@ export default createPlugin<
         getCrossfadeConfig: () => this.config,
         setCrossfadeConfig: (changes) => this.saveConfig?.(changes),
       });
+
+      this.unwatchVideo = watchVideo((current) => {
+        this.crossfader?.setVideo(current);
+        this.playFrom?.setVideo(current);
+      });
     },
 
     stop() {
+      this.unwatchVideo?.();
       registerDjFeatures(undefined);
       this.unregisterSettings?.();
       this.crossfader?.detach();

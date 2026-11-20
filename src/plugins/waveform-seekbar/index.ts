@@ -1,4 +1,5 @@
 import { t } from '@/i18n';
+import { watchVideo } from '@/plugins/utils/renderer/video-watcher';
 import { createPlugin } from '@/utils';
 
 import { backend } from './backend';
@@ -39,6 +40,8 @@ export default createPlugin<
     songId?: string;
     onKeyDown?: (event: KeyboardEvent) => void;
     onTimeUpdate?: () => void;
+    video?: HTMLVideoElement;
+    unwatchVideo?: () => void;
     apply: () => void;
     load: () => void;
   },
@@ -85,10 +88,14 @@ export default createPlugin<
     onPlayerApiReady(api) {
       this.api = api;
       this.waveform = new Waveform(api);
-      this.onTimeUpdate = () => this.load();
-      document
-        .querySelector('video')
-        ?.addEventListener('timeupdate', this.onTimeUpdate);
+      const onTimeUpdate = () => this.load();
+      this.onTimeUpdate = onTimeUpdate;
+      // Follow the <video> element when YouTube Music replaces it.
+      this.unwatchVideo = watchVideo((video) => {
+        this.video?.removeEventListener('timeupdate', onTimeUpdate);
+        video.addEventListener('timeupdate', onTimeUpdate);
+        this.video = video;
+      });
       this.apply();
       this.load();
     },
@@ -148,11 +155,11 @@ export default createPlugin<
       if (this.onKeyDown) {
         window.removeEventListener('keydown', this.onKeyDown, true);
       }
+      this.unwatchVideo?.();
       if (this.onTimeUpdate) {
-        document
-          .querySelector('video')
-          ?.removeEventListener('timeupdate', this.onTimeUpdate);
+        this.video?.removeEventListener('timeupdate', this.onTimeUpdate);
       }
+      this.video = undefined;
       this.config = { ...this.config, visible: false };
       this.apply();
     },
