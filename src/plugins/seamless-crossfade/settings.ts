@@ -28,6 +28,12 @@ export type SeamlessCrossfadeConfig = {
   bestPartsAll: boolean;
   /** Play every song (or part) at the same loudness. */
   loudnessMatching: boolean;
+  /**
+   * Automatic and manual crossfades last `fadeBeats` beats of the outgoing
+   * song (when its tempo is known) instead of a number of seconds.
+   */
+  fadeInBeats: boolean;
+  fadeBeats: number;
 };
 
 export const defaultConfig: SeamlessCrossfadeConfig = {
@@ -44,6 +50,8 @@ export const defaultConfig: SeamlessCrossfadeConfig = {
   bestPartsSongs: 50,
   bestPartsAll: false,
   loudnessMatching: true,
+  fadeInBeats: true,
+  fadeBeats: 16,
 };
 
 export const MIN_PART_LENGTH = 30;
@@ -51,6 +59,9 @@ export const MAX_PART_LENGTH = 300;
 
 export const MIN_SONGS = 10;
 export const MAX_SONGS = 1000;
+
+export const MIN_BEATS = 4;
+export const MAX_BEATS = 64;
 
 export const MIN_STEEPNESS = 1;
 export const MAX_STEEPNESS = 10;

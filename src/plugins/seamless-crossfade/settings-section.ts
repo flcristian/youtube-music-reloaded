@@ -8,10 +8,12 @@ import {
 import {
   clampDuration,
   type FadeCurve,
+  MAX_BEATS,
   MAX_DURATION,
   MAX_PART_LENGTH,
   MAX_SONGS,
   MAX_STEEPNESS,
+  MIN_BEATS,
   MIN_DURATION,
   MIN_PART_LENGTH,
   MIN_SONGS,
@@ -81,6 +83,24 @@ export const renderSettings = (
     step: 0.5,
     unit: 's',
     onChange: (seconds) => save({ jumpDuration: clampDuration(seconds) }),
+  });
+
+  const fadeBeats = createSlider({
+    label: t(key('fade-beats')),
+    value: config.fadeBeats,
+    min: MIN_BEATS,
+    max: MAX_BEATS,
+    step: 4,
+    onChange: (beats) => save({ fadeBeats: beats }),
+  });
+  fadeBeats.setDisabled(!config.fadeInBeats);
+  const fadeInBeats = createToggle({
+    label: t(key('fade-in-beats')),
+    checked: config.fadeInBeats,
+    onChange: (value) => {
+      fadeBeats.setDisabled(!value);
+      save({ fadeInBeats: value });
+    },
   });
 
   const askOnPlay = createToggle({
@@ -155,6 +175,8 @@ export const renderSettings = (
     manualToggle.row,
     manualDuration.row,
     jumpDuration.row,
+    fadeInBeats.row,
+    fadeBeats.row,
     askOnPlay.row,
     bestPartLength.row,
     bestPartsAll.row,

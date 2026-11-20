@@ -111,7 +111,7 @@ export const computePeaks = async (source: AudioSource, videoId?: string) => {
   const audio = await context.decodeAudioData(data);
   // Its beats and loudness too, for crossfades (same decode).
   if (videoId) {
-    rememberTempo(videoId, analyzeTempo(audio) ?? null);
+    rememberTempo(videoId, (await analyzeTempo(audio)) ?? null);
     rememberLoudness(videoId, measureLoudness(audio));
   }
 

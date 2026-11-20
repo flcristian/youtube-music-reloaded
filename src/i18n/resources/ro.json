@@ -839,7 +839,9 @@
         "jump": "Crossfade pentru „Redă de la…”",
         "manual": "Crossfade la schimbarea manuală a piesei",
         "outro-steepness": "Cât de repede scade piesa veche",
-        "loudness-matching": "Același volum pentru toate piesele"
+        "loudness-matching": "Același volum pentru toate piesele",
+        "fade-in-beats": "Durata crossfade-ului în bătăi (secunde când piesa nu are un ritm clar)",
+        "fade-beats": "Bătăi"
       }
     },
     "shortcuts": {

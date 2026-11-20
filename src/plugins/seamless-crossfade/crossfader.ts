@@ -1,12 +1,17 @@
 import { loadTempo } from '@/plugins/waveform-seekbar/peaks';
 import {
+  BAR,
   beatGrid,
+  marksBetween,
+  PHRASE,
   tempoCache,
+  toNextBar,
   type BeatGrid,
   type Tempo,
 } from '@/plugins/waveform-seekbar/tempo';
 
 import {
+  clampDuration,
   fadeFor,
   type Fade,
   type SeamlessCrossfadeConfig,
@@ -57,6 +62,15 @@ const BEND_INTERVAL = 500;
 const BEND_STEP = 0.005;
 /** Seeks the incoming song may take to land on the beat. */
 const ALIGN_ATTEMPTS = 3;
+/**
+ * An automatic crossfade starts on a phrase (or bar) start of the outgoing
+ * song: up to this many beats before the planned moment…
+ */
+const ALIGN_EARLY_BEATS = 16;
+/** …or this many after (its tail is then a little shorter). */
+const ALIGN_LATE_BEATS = 2;
+/** Most seconds an automatic crossfade can be moved earlier. */
+const ALIGN_EARLY_MAX = 12;
 
 /** Positive remainder. */
 const mod = (value: number, by: number) => ((value % by) + by) % by;
@@ -112,7 +126,16 @@ interface BeatSync {
   bentAt: number;
   skipped: number;
   /** Once the incoming song plays: both beat grids, and the bend. */
-  lock?: { out: BeatGrid; in: BeatGrid; ratio: number; bend: boolean };
+  lock?: {
+    out: BeatGrid;
+    in: BeatGrid;
+    ratio: number;
+    bend: boolean;
+    incoming: Tempo;
+  };
+  /** The incoming song's bars were looked at, and lined up. */
+  barsDone?: boolean;
+  barsAligned?: boolean;
 }
 
 const volumeDesc = Object.getOwnPropertyDescriptor(
@@ -186,6 +209,8 @@ export class Crossfader {
   /** Paused by the user (as opposed to the player loading a new song). */
   private userPaused = false;
   private autoSkippedFor?: string;
+  /** Where the playing song's automatic crossfade starts (media time). */
+  private skipPlan?: { key: string; at: number };
   private autoSkipAt = -Infinity;
   /** A "Play from…" in progress: crossfade with its own duration. */
   private jump?: { at: number; duration: number; startAt: number };
@@ -337,9 +362,9 @@ export class Crossfader {
       }
       const fade = jump
         ? jump.duration
-        : auto
-          ? settings.autoDuration
-          : settings.manualDuration;
+        : this.fadeLength(
+            auto ? settings.autoDuration : settings.manualDuration,
+          );
 
       const mirror = this.mirrors.current;
       const time = video.currentTime;
@@ -630,6 +655,7 @@ export class Crossfader {
         in: inGrid,
         ratio,
         bend: Math.abs(ratio - 1) <= MAX_BEND,
+        incoming,
       };
     }
     const { lock } = sync;
@@ -639,15 +665,34 @@ export class Crossfader {
     // The outgoing song's beats as they will play (bent or not).
     const outPeriod = lock.out.period / (lock.bend ? lock.ratio : rate);
     const grid = Math.min(lock.in.period, outPeriod);
-    const delta = mod(
+    // First its bars onto the outgoing song's (same tempo only): forward,
+    // less than a bar.
+    if (!sync.barsDone) {
+      sync.barsDone = true;
+      const outBar = lock.bend ? toNextBar(sync.tempo, outTime) : undefined;
+      const inBar =
+        outBar === undefined ? undefined : toNextBar(lock.incoming, inTime);
+      if (outBar !== undefined && inBar !== undefined) {
+        sync.barsAligned = true;
+        const delta = mod(inBar - (outBar / rate), lock.in.period * BAR);
+        if (delta > 0.015) {
+          this.video.currentTime += delta;
+          return true;
+        }
+      }
+    }
+    // Then onto its beats: forward only (it starts a little early), or
+    // either way once the bars are lined up (so they stay lined up).
+    const ahead = mod(
       toNextBeat(lock.in, inTime) - (toNextBeat(lock.out, outTime) / rate),
       grid,
     );
+    const delta = sync.barsAligned ? wrap(ahead, grid) : ahead;
     // Close enough, or it would skip more than about a beat in all.
-    if (delta < 0.015 || grid - delta < 0.015) return false;
-    if (sync.skipped + delta > grid * 1.25) return false;
+    if (Math.abs(delta) < 0.015 || grid - delta < 0.015) return false;
+    if (sync.skipped + Math.abs(delta) > grid * 1.25) return false;
     sync.attempts++;
-    sync.skipped += delta;
+    sync.skipped += Math.abs(delta);
     this.video.currentTime += delta;
     return true;
   }
@@ -687,6 +732,19 @@ export class Crossfader {
   }
 
   /**
+   * How long a crossfade out of the playing song lasts: a number of its
+   * beats when its tempo is known (and that's the setting), else `seconds`.
+   */
+  private fadeLength(seconds: number) {
+    const settings = this.getSettings();
+    if (!settings.fadeInBeats) return seconds;
+    const videoId = this.playing?.videoId;
+    const tempo = videoId ? tempoCache.get(videoId) : undefined;
+    if (!tempo) return seconds;
+    return clampDuration((settings.fadeBeats * 60) / tempo.bpm);
+  }
+
+  /**
    * Remember the playing song (for the next crossfade) and have the next
    * song's tempo ready by then.
    */
@@ -723,7 +781,7 @@ export class Crossfader {
     const mirror = this.mirrors.current;
     if (!mirror) return;
 
-    const fade = settings.autoDuration;
+    const fade = this.fadeLength(settings.autoDuration);
     const time = video.currentTime;
     const songStart = time - api.getCurrentTime();
     const end = this.songEnd(
@@ -736,16 +794,57 @@ export class Crossfader {
     const minimumSong = chosenEnd === undefined ? fade * 2 : 0;
     if (end - songStart < minimumSong) return;
     const remaining = end - time;
-    if (remaining > fade + PREROLL_LEAD || remaining < 0.5) return;
+    const lookahead = fade + PREROLL_LEAD + ALIGN_EARLY_MAX;
+    if (remaining > lookahead || remaining < 0.5) return;
 
     const key = `${api.getVideoData()?.video_id}@${songStart.toFixed(1)}`;
     if (key === this.autoSkippedFor) return;
+    // Where it starts: on a phrase (or bar) start near `end - fade`.
+    if (this.skipPlan?.key !== key) {
+      this.skipPlan = {
+        key,
+        at: this.alignedStart(end - fade, songStart, time + PREROLL_LEAD),
+      };
+    }
+    const skipAt = this.skipPlan.at;
+    if (time < skipAt - PREROLL_LEAD) return;
     if (getRepeatMode() === 'ONE') return;
-    if (!mirror.covers(time, remaining - 0.3)) return;
+    if (!mirror.covers(time, end - time - 0.3)) return;
 
     this.autoSkippedFor = key;
-    this.prerollThenSkip(mirror, end - fade);
+    this.prerollThenSkip(mirror, skipAt);
   };
+
+  /**
+   * Media time to start an automatic crossfade planned at `planned`: the
+   * playing song's closest phrase start around it, else its closest bar
+   * start, else beat (never before `notBefore`).
+   */
+  private alignedStart(planned: number, songStart: number, notBefore: number) {
+    const videoId = this.playing?.videoId;
+    const tempo = videoId ? tempoCache.get(videoId) : undefined;
+    if (!tempo) return planned;
+    const beat = 60 / tempo.bpm;
+    const time = planned - songStart;
+    const earliest = Math.max(
+      time - Math.min(ALIGN_EARLY_BEATS * beat, ALIGN_EARLY_MAX),
+      notBefore - songStart,
+    );
+    const latest = time + (ALIGN_LATE_BEATS * beat);
+    const closest = (times: number[]) =>
+      times.length
+        ? times.reduce((a, b) =>
+            Math.abs(b - time) < Math.abs(a - time) ? b : a,
+          )
+        : undefined;
+    const found =
+      closest(marksBetween(tempo, earliest, latest, PHRASE)) ??
+      closest(
+        marksBetween(tempo, Math.max(earliest, time - (BAR * beat)), latest, BAR),
+      ) ??
+      closest(marksBetween(tempo, time - (beat / 2), time + (beat / 2), 1));
+    return found === undefined ? planned : songStart + found;
+  }
 
   /**
    * Start the outgoing song's mirror muted, get it in step with the player

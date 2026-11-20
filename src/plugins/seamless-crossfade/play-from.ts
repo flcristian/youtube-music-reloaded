@@ -296,6 +296,8 @@ export class PlayFrom {
   private video?: HTMLVideoElement;
   private modal?: HTMLElement;
   private cancelEnsure?: () => void;
+  /** Stops keeping the open dropdown placed. */
+  private unplace?: () => void;
 
   constructor(
     private readonly api: MusicPlayer,
@@ -557,6 +559,8 @@ export class PlayFrom {
   }
 
   private closeModal() {
+    this.unplace?.();
+    this.unplace = undefined;
     this.modal?.remove();
     this.modal = undefined;
   }
@@ -722,7 +726,9 @@ export class PlayFrom {
     });
 
     document.body.append(host);
-    if (anchor) placeDropdown($<HTMLElement>('.dialog'), anchor);
+    if (anchor) {
+      this.unplace = placeDropdown($<HTMLElement>('.dialog'), anchor);
+    }
     $<HTMLElement>('.dialog').tabIndex = -1;
     $<HTMLElement>('.dialog').focus();
     update();
@@ -909,20 +915,45 @@ export class PlayFrom {
   }
 }
 
-/** Put the dropdown under `anchor` (or above it if there's no room). */
+/**
+ * Put the dropdown under `anchor`, or above it if there's more room there,
+ * always inside the window (scrolling inside if it's taller than the room).
+ * Follows its own size (its content loads after it opens) and the window's.
+ * Returns a function that stops following.
+ */
 const placeDropdown = (dialog: HTMLElement, anchor: HTMLElement) => {
-  const rect = anchor.getBoundingClientRect();
-  const { offsetWidth: width, offsetHeight: height } = dialog;
   const margin = 8;
-  let top = rect.bottom + 6;
-  if (top + height > window.innerHeight - margin) top = rect.top - height - 6;
-  top = Math.max(margin, top);
-  const left = Math.min(
-    window.innerWidth - width - margin,
-    Math.max(margin, rect.left),
-  );
-  dialog.style.top = `${top}px`;
-  dialog.style.left = `${left}px`;
+  const gap = 6;
+  const place = () => {
+    const rect = anchor.getBoundingClientRect();
+    const below = window.innerHeight - rect.bottom - gap - margin;
+    const above = rect.top - gap - margin;
+    // Its natural height, without the limit set last time.
+    dialog.style.maxHeight = '';
+    const height = dialog.scrollHeight;
+    const width = dialog.offsetWidth;
+    const downwards = height <= below || below >= above;
+    const room = Math.max(0, downwards ? below : above);
+    dialog.style.maxHeight = `${room}px`;
+    dialog.style.overflowY = height > room ? 'auto' : '';
+    const shown = Math.min(height, room);
+    const top = downwards ? rect.bottom + gap : rect.top - gap - shown;
+    // Start at the anchor's left edge; near the right side, end at its
+    // right edge instead; always inside the window.
+    let left = rect.left;
+    if (left + width > window.innerWidth - margin) left = rect.right - width;
+    left = Math.min(window.innerWidth - width - margin, Math.max(margin, left));
+    dialog.style.top = `${Math.max(margin, top)}px`;
+    dialog.style.left = `${left}px`;
+  };
+  place();
+  const observer = new ResizeObserver(() => place());
+  observer.observe(dialog);
+  window.addEventListener('resize', place);
+  return () => {
+    observer.disconnect();
+    window.removeEventListener('resize', place);
+  };
 };
 
 const styles = `
