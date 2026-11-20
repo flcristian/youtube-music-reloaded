@@ -26,6 +26,11 @@ export interface DjFeatures {
   currentPart: () =>
     | { videoId: string; start: number; end?: number }
     | undefined;
+  /**
+   * How long before the playing song's end the transition to the next one
+   * starts (seconds; undefined if it doesn't happen automatically).
+   */
+  transitionLead: () => number | undefined;
   /** Move where the playing song ends; `undefined`: until its end. */
   setPartEnd: (end: number | undefined) => void;
   getCrossfadeConfig: () => SeamlessCrossfadeConfig;

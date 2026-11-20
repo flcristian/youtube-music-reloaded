@@ -35,8 +35,21 @@ const BAND_EDGES = [0, 150, 600, 2000];
 /** Analysis frames between yields to the page. */
 const CHUNK = 1500;
 
+/** A musical key, e.g. A minor: tonic 9, minor, Camelot "8A". */
+export interface MusicalKey {
+  /** Pitch class of the tonic (0 = C … 11 = B). */
+  tonic: number;
+  minor: boolean;
+  /** Its Camelot wheel code (DJ notation), e.g. "8A". */
+  camelot: string;
+  /** Its common name, e.g. "Am" or "F#". */
+  name: string;
+}
+
 export interface Tempo {
   bpm: number;
+  /** Its key, if clear. */
+  key?: MusicalKey;
   /** Onset strength, `FPS` values per second of song. */
   envelope: Float32Array;
   /** Beat times, in song seconds. */
@@ -68,10 +81,22 @@ export const rememberTempo = (videoId: string, tempo: Tempo | null) => {
   }
 };
 
-const pause = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+/**
+ * Lets the page handle other work for a moment. Through a message channel:
+ * timers are slowed down to once a second in a hidden window, which would
+ * stretch an analysis to minutes.
+ */
+const waiting: (() => void)[] = [];
+const channel = new MessageChannel();
+channel.port1.onmessage = () => waiting.shift()?.();
+export const pause = () =>
+  new Promise<void>((resolve) => {
+    waiting.push(resolve);
+    channel.port2.postMessage(null);
+  });
 
 /** In-place radix-2 FFT. */
-const fft = (re: Float32Array, im: Float32Array) => {
+export const fft = (re: Float32Array, im: Float32Array) => {
   const n = re.length;
   for (let i = 1, j = 0; i < n; i++) {
     let bit = n >> 1;
@@ -344,6 +369,158 @@ const beatFeatures = (
   return { kick, change: change(BAR), sectionChange: change(BAR * 2) };
 };
 
+/** Key detection: FFT size, hop (s), and the notes' range (Hz). */
+const KEY_FFT = 4096;
+const KEY_HOP = 0.25;
+const KEY_LOWEST = 100;
+const KEY_HIGHEST = 1500;
+/** Krumhansl-Kessler key profiles (how much each degree sounds in a key). */
+const MAJOR_PROFILE = [
+  6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88,
+];
+const MINOR_PROFILE = [
+  6.33, 2.68, 3.52, 5.38, 2.6, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17,
+];
+const NOTE_NAMES = [
+  'C',
+  'C#',
+  'D',
+  'D#',
+  'E',
+  'F',
+  'F#',
+  'G',
+  'G#',
+  'A',
+  'A#',
+  'B',
+];
+/** Camelot numbers by tonic: majors ("B"; C is 8B), minors ("A"; Am is 8A). */
+const CAMELOT_MAJOR = [8, 3, 10, 5, 12, 7, 2, 9, 4, 11, 6, 1];
+const CAMELOT_MINOR = [5, 12, 7, 2, 9, 4, 11, 6, 1, 8, 3, 10];
+
+const pitchClass = (value: number) => ((value % 12) + 12) % 12;
+
+export const makeKey = (tonic: number, minor: boolean): MusicalKey => {
+  const number = (minor ? CAMELOT_MINOR : CAMELOT_MAJOR)[tonic];
+  return {
+    tonic,
+    minor,
+    camelot: `${number}${minor ? 'A' : 'B'}`,
+    name: `${NOTE_NAMES[tonic]}${minor ? 'm' : ''}`,
+  };
+};
+
+/**
+ * Whether two keys mix well (Camelot wheel): the same, the relative
+ * major/minor, or a fifth apart.
+ */
+export const keysFit = (a: MusicalKey, b: MusicalKey) => {
+  const number = (key: MusicalKey) => Number.parseInt(key.camelot, 10);
+  const distance = Math.abs(number(a) - number(b)) % 12;
+  if (distance === 0) return true;
+  return a.minor === b.minor && (distance === 1 || distance === 11);
+};
+
+/** How much each of the 12 notes sounds over the song (spectral peaks). */
+const noteStrengths = async (audio: AudioBuffer) => {
+  const channels = Array.from({ length: audio.numberOfChannels }, (_, i) =>
+    audio.getChannelData(i),
+  );
+  const rate = audio.sampleRate;
+  const half = KEY_FFT / 2;
+  const window = new Float32Array(KEY_FFT);
+  for (let i = 0; i < KEY_FFT; i++) {
+    window[i] = 0.5 - (0.5 * Math.cos((2 * Math.PI * i) / KEY_FFT));
+  }
+  // Each FFT bin's note (or -1), and how close to it the bin is.
+  const note = new Int32Array(half).fill(-1);
+  const closeness = new Float32Array(half);
+  for (let k = 1; k < half; k++) {
+    const hz = (k * rate) / KEY_FFT;
+    if (hz < KEY_LOWEST || hz > KEY_HIGHEST) continue;
+    const midi = 69 + (12 * Math.log2(hz / 440));
+    const nearest = Math.round(midi);
+    const off = Math.abs(midi - nearest);
+    if (off > 0.35) continue;
+    note[k] = pitchClass(nearest);
+    closeness[k] = 1 - (off / 0.5);
+  }
+  const re = new Float32Array(KEY_FFT);
+  const im = new Float32Array(KEY_FFT);
+  const magnitude = new Float32Array(half);
+  const strengths = new Float64Array(12);
+  const hop = Math.round(KEY_HOP * rate);
+  let frames = 0;
+  for (let offset = 0; offset + KEY_FFT < audio.length; offset += hop) {
+    if (++frames % 100 === 0) await pause();
+    for (let i = 0; i < KEY_FFT; i++) {
+      let sample = 0;
+      for (const channel of channels) sample += channel[offset + i];
+      re[i] = (sample / channels.length) * window[i];
+      im[i] = 0;
+    }
+    fft(re, im);
+    for (let k = 0; k < half; k++) magnitude[k] = Math.hypot(re[k], im[k]);
+    const frame = new Float64Array(12);
+    let total = 0;
+    for (let k = 2; k < half - 1; k++) {
+      if (note[k] < 0) continue;
+      const value = magnitude[k];
+      // Only spectral peaks well above their surroundings (notes, not noise).
+      if (!(value > magnitude[k - 1] && value >= magnitude[k + 1])) continue;
+      let floor = 0;
+      for (let j = k - 20; j <= k + 20; j++) {
+        floor += magnitude[Math.min(half - 1, Math.max(0, j))];
+      }
+      floor /= 41;
+      if (value < floor * 2) continue;
+      frame[note[k]] += closeness[k] * value;
+      total += closeness[k] * value;
+    }
+    if (total > 0) {
+      for (let i = 0; i < 12; i++) strengths[i] += frame[i] / total;
+    }
+  }
+  return strengths;
+};
+
+const correlation = (a: ArrayLike<number>, b: ArrayLike<number>) => {
+  let meanA = 0;
+  let meanB = 0;
+  for (let i = 0; i < 12; i++) {
+    meanA += a[i] / 12;
+    meanB += b[i] / 12;
+  }
+  let product = 0;
+  let spreadA = 0;
+  let spreadB = 0;
+  for (let i = 0; i < 12; i++) {
+    product += (a[i] - meanA) * (b[i] - meanB);
+    spreadA += (a[i] - meanA) ** 2;
+    spreadB += (b[i] - meanB) ** 2;
+  }
+  return product / (Math.sqrt(spreadA * spreadB) || 1);
+};
+
+/** The song's key: the key profile its notes fit best. */
+const detectKey = async (audio: AudioBuffer) => {
+  const strengths = await noteStrengths(audio);
+  if (!strengths.some((value) => value > 0)) return undefined;
+  let best: { score: number; key: MusicalKey } | undefined;
+  for (let tonic = 0; tonic < 12; tonic++) {
+    for (const minor of [false, true]) {
+      const profile = minor ? MINOR_PROFILE : MAJOR_PROFILE;
+      const rotated = profile.map((_, i) => profile[pitchClass(i - tonic)]);
+      const score = correlation(strengths, rotated);
+      if (!best || score > best.score) {
+        best = { score, key: makeKey(tonic, minor) };
+      }
+    }
+  }
+  return best?.key;
+};
+
 /** Tempo, beats, bars and phrases; `undefined` if it has no clear beat. */
 export const analyzeTempo = async (
   audio: AudioBuffer,
@@ -355,8 +532,11 @@ export const analyzeTempo = async (
   const beatFrames = await trackBeats(frames.envelope, bpm);
   await pause();
   const features = beatFeatures(frames, beatFrames);
+  await pause();
+  const key = await detectKey(audio);
   return {
     bpm,
+    key,
     envelope: frames.envelope,
     beats: Float32Array.from(beatFrames, (f) => f / FPS),
     ...features,

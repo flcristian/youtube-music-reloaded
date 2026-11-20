@@ -2,6 +2,7 @@ import { getDjFeatures } from '@/plugins/utils/renderer/dj-registry';
 
 import { barCount, drawWaveform } from './draw';
 
+import type { Sung } from './lyrics';
 import type { MusicPlayer } from '@/types/music-player';
 
 const HEIGHT = 56;
@@ -22,6 +23,7 @@ const MIN_REMAINING = 5;
 export class Waveform {
   readonly canvas = document.createElement('canvas');
   private peaks?: Float32Array;
+  private sung: Sung[] = [];
   private frame?: number;
   private lastKey = '';
   private dragging: 'seek' | 'end' | undefined;
@@ -45,6 +47,12 @@ export class Waveform {
 
   setPeaks(peaks: Float32Array | undefined) {
     this.peaks = peaks;
+    this.lastKey = '';
+  }
+
+  /** Where the song is sung (song seconds), shown in blue. */
+  setSung(sung: Sung[]) {
+    this.sung = sung;
     this.lastKey = '';
   }
 
@@ -96,10 +104,35 @@ export class Waveform {
 
     // Only repaint when something visible changed.
     const ratio = window.devicePixelRatio || 1;
-    const key = `${width}|${ratio}|${playedBars}|${fromBar}|${toBar}|${this.peaks ? 1 : 0}|${endHandle}`;
+    const duration = this.api.getDuration();
+    const lead = getDjFeatures()?.transitionLead();
+    const transitionAt =
+      lead !== undefined && duration > 0
+        ? Math.max(0, to - (lead / duration))
+        : undefined;
+    const transitionBar =
+      transitionAt === undefined ? -1 : Math.round(transitionAt * width);
+    const key = `${transitionBar}|${width}|${ratio}|${playedBars}|${fromBar}|${toBar}|${this.peaks ? 1 : 0}|${endHandle}|${this.sung.length}|${duration > 0}`;
     if (key === this.lastKey) return;
     this.lastKey = key;
-    drawWaveform(this.canvas, this.peaks, to, from, endHandle, progress);
+    const sung =
+      duration > 0
+        ? this.sung.map((span) => ({
+            from: span.start / duration,
+            to: span.end / duration,
+            voice: span.voice,
+          }))
+        : [];
+    drawWaveform(
+      this.canvas,
+      this.peaks,
+      to,
+      from,
+      endHandle,
+      progress,
+      sung,
+      transitionAt,
+    );
   }
 
   /** Song share under the pointer. */

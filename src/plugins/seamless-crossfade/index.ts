@@ -6,11 +6,13 @@ import { createPlugin } from '@/utils';
 
 import { BestPartsPlaylist } from './best-parts-playlist';
 import { Crossfader } from './crossfader';
+import { DjShuffle } from './dj-shuffle';
 import { Leveler } from './leveler';
 import { MirrorManager } from './mirror';
 import { PlayFrom } from './play-from';
 import { defaultConfig, type SeamlessCrossfadeConfig } from './settings';
 import { renderSettings } from './settings-section';
+import { TransitionView } from './transition-view';
 
 import type { MusicPlayer } from '@/types/music-player';
 
@@ -30,6 +32,8 @@ export default createPlugin<
     saveConfig?: (changes: Partial<SeamlessCrossfadeConfig>) => void;
     unwatchVideo?: () => void;
     leveler?: Leveler;
+    djShuffle?: DjShuffle;
+    transitionView?: TransitionView;
   },
   SeamlessCrossfadeConfig
 >({
@@ -81,6 +85,13 @@ export default createPlugin<
         () => this.config,
       );
       this.crossfader.attach();
+      this.transitionView = new TransitionView(
+        this.crossfader,
+        api,
+        () => this.config.transitionView,
+        (transitionView) => this.saveConfig?.({ transitionView }),
+      );
+      this.transitionView.start();
 
       // "Play from…" in song menus.
       this.playFrom = new PlayFrom(
@@ -105,7 +116,13 @@ export default createPlugin<
         partLength: () => this.config.bestPartLength,
         songCount: () =>
           this.config.bestPartsAll ? undefined : this.config.bestPartsSongs,
+        djShuffle: (videoIds) => this.djShuffle?.start(videoIds),
       });
+      this.djShuffle = new DjShuffle(
+        api,
+        (videoId) => parts.intervalEnd(videoId),
+        (videoId, transition) => parts.suggestTransition(videoId, transition),
+      );
       this.bestParts.install();
       const bestParts = this.bestParts;
       parts.onPlaylistPlay = (playlistId, endpoint, anchor) =>
@@ -134,6 +151,7 @@ export default createPlugin<
       this.mirrors.onDispose = (audio) => leveler.release(audio);
       this.crossfader.transitionFor = (videoId, consume) =>
         parts.transitionFor(videoId, consume);
+      this.crossfader.wantsDrop = (videoId) => parts.wantsDrop(videoId);
       this.crossfader.startNextAt = (videoId, start) =>
         parts.startNextAt(videoId, start);
       this.mirrors.onMirror = (audio) => leveler.prepare(audio);
@@ -153,6 +171,7 @@ export default createPlugin<
               : 'INSERT_AT_END',
           ),
         currentPart: () => playFrom.currentPart(),
+        transitionLead: () => this.crossfader?.transitionLead(),
         setPartEnd: (end) => playFrom.setPartEnd(end),
         getCrossfadeConfig: () => this.config,
         setCrossfadeConfig: (changes) => this.saveConfig?.(changes),
@@ -173,6 +192,8 @@ export default createPlugin<
       this.crossfader?.detach();
       this.playFrom?.uninstall();
       this.bestParts?.uninstall();
+      this.djShuffle?.stop();
+      this.transitionView?.stop();
     },
   },
 });

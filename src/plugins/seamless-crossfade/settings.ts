@@ -7,7 +7,9 @@ export type TransitionStyle =
   | 'filter'
   | 'bass-swap'
   | 'echo-out'
-  | 'loop-out';
+  | 'loop-out'
+  | 'filter-stop'
+  | 'stop-filter';
 
 export const TRANSITION_STYLES: TransitionStyle[] = [
   'fade',
@@ -16,6 +18,8 @@ export const TRANSITION_STYLES: TransitionStyle[] = [
   'bass-swap',
   'echo-out',
   'loop-out',
+  'filter-stop',
+  'stop-filter',
 ];
 
 /** A transition chosen for one song (in "Play from…"). */
@@ -36,7 +40,19 @@ export const STYLE_LENGTHS: Record<
   'bass-swap': { min: 2, max: 40, step: 1, value: 16 },
   'echo-out': { min: 1, max: 16, step: 0.5, value: 4 },
   'loop-out': { min: 2, max: 30, step: 1, value: 8 },
+  'filter-stop': { min: 8, max: 40, step: 1, value: 16 },
+  // Its length is the next song's filter-in only.
+  'stop-filter': { min: 2, max: 30, step: 0.5, value: 6 },
 };
+
+/** Filter + tape stop: the tape stop at its end, in seconds. */
+export const FILTER_STOP_BRAKE = 2.5;
+
+/** A transition's length, at least its style's shortest. */
+export const lengthFor = (style: TransitionStyle, seconds: number) =>
+  style === 'filter-stop'
+    ? Math.max(STYLE_LENGTHS['filter-stop'].min, seconds)
+    : seconds;
 
 export type SeamlessCrossfadeConfig = {
   enabled: boolean;
@@ -74,6 +90,8 @@ export type SeamlessCrossfadeConfig = {
   fadeBeats: number;
   /** The next song starts so its drop lands as the transition ends. */
   dropSync: boolean;
+  /** Show a panel with both songs' beats while a transition runs. */
+  transitionView: boolean;
   transitionStyle: TransitionStyle;
 };
 
@@ -94,6 +112,7 @@ export const defaultConfig: SeamlessCrossfadeConfig = {
   fadeInBeats: true,
   fadeBeats: 16,
   dropSync: false,
+  transitionView: true,
   transitionStyle: 'fade',
 };
 

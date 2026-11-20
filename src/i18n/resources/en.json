@@ -822,14 +822,29 @@
         "progress": "Finding the best parts… {{done}}/{{total}}",
         "queueing": "Adding to the queue… {{done}}/{{total}}",
         "shuffle": "Shuffle best parts",
-        "shuffle-play": "Shuffle play"
+        "shuffle-play": "Shuffle play",
+        "dj-shuffle": "DJ shuffle",
+        "dj-shuffle-parts": "DJ shuffle best parts"
       },
       "description": "Crossfades on every song change: the song you leave keeps playing and fades out while the next one fades in. Reuses already-downloaded audio, no extra streams. Settings: Cmd+Shift+.",
       "name": "Seamless Crossfade",
+      "transition": {
+        "idle": "Next transition",
+        "in": "Coming in",
+        "out": "Leaving",
+        "next": "Up next",
+        "playing": "Playing"
+      },
       "play-from": {
         "add-to-queue": "Add to queue",
         "best-part": "Best part",
         "best-part-help": "Select the part listeners replay most on YouTube (keeps the selected length, or uses \"Best part length\" from settings)",
+        "drop": "Drop",
+        "key-clashes": "key clashes with the playing song ({{key}})",
+        "key-fits": "key fits the playing song ({{key}})",
+        "drop-help": "Select from the song's drop: it starts just early enough for the drop to land as the transition ends",
+        "drop-loading": "Analysing the song…",
+        "drop-none": "No clear drop found in this song",
         "best-part-loading": "Loading replay data…",
         "best-part-none": "No replay data for this song",
         "cancel": "Cancel",
@@ -860,6 +875,7 @@
         "loudness-matching": "Match loudness between songs",
         "fade-in-beats": "Crossfade length in beats (seconds when a song has no clear beat)",
         "fade-beats": "Beats",
+        "transition-view": "Show the transition view (Cmd+Shift+T)",
         "drop-sync": "Drop sync: the next song's drop lands as the transition ends",
         "style": {
           "label": "Transition style",
@@ -868,7 +884,9 @@
           "filter": "Filter",
           "bass-swap": "Bass swap",
           "echo-out": "Echo out",
-          "loop-out": "Loop out"
+          "loop-out": "Loop out",
+          "filter-stop": "Filter + tape stop",
+          "stop-filter": "Tape stop + filter in"
         }
       }
     },

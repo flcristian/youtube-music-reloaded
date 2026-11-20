@@ -14,6 +14,24 @@ const UPCOMING = 'rgba(255, 0, 51, 0.5)';
 const UPCOMING_REFLECTION = 'rgba(255, 0, 51, 0.22)';
 const UNPLAYED = 'rgba(255, 255, 255, 0.45)';
 const UNPLAYED_REFLECTION = 'rgba(255, 255, 255, 0.2)';
+/** Where it's sung, per singer: blue, pink, purple, magenta. */
+const VOICE_COLOURS = [
+  [62, 166, 255],
+  [255, 128, 191],
+  [160, 110, 255],
+  [230, 40, 230],
+];
+const voiceColours = VOICE_COLOURS.map(([r, g, b]) => {
+  const rgba = (alpha: number) => `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  return {
+    played: rgba(1),
+    playedReflection: rgba(0.45),
+    upcoming: rgba(0.55),
+    upcomingReflection: rgba(0.25),
+    unplayed: rgba(0.4),
+    unplayedReflection: rgba(0.18),
+  };
+});
 
 /** Number of bars that fit in `width` CSS pixels. */
 export const barCount = (width: number) =>
@@ -25,6 +43,7 @@ export const barCount = (width: number) =>
  * colour. With `markers`, also draws thin lines at both ends of that part
  * (`'end'`: only at its end). With `progress` (share), the part after it is
  * a lighter accent: still to play. Without `peaks`, draws flat bars.
+ * `sung`: where it's sung (shares, from–to), drawn in blue.
  */
 export const drawWaveform = (
   canvas: HTMLCanvasElement,
@@ -33,6 +52,9 @@ export const drawWaveform = (
   highlightFrom = 0,
   markers: boolean | 'end' = false,
   progress?: number,
+  sung: { from: number; to: number; voice?: number }[] = [],
+  /** Where the transition to the next song starts (share), in yellow. */
+  transitionAt?: number,
 ) => {
   const ratio = window.devicePixelRatio || 1;
   const width = canvas.clientWidth;
@@ -62,17 +84,44 @@ export const drawWaveform = (
     }
     const lit = i >= highlightedFrom && i < highlighted;
     const upcoming = lit && i >= played;
+    const middle = (i + 0.5) / bars;
+    const span = sung.find((s) => middle >= s.from && middle < s.to);
+    const colours = span
+      ? voiceColours[(span.voice ?? 0) % voiceColours.length]
+      : undefined;
     const x = i * (BAR_WIDTH + BAR_GAP);
     const up = level * (baseline - 2);
     const down = level * (height - baseline - 1);
-    context.fillStyle = upcoming ? UPCOMING : lit ? PLAYED : UNPLAYED;
+    context.fillStyle = colours
+      ? upcoming
+        ? colours.upcoming
+        : lit
+          ? colours.played
+          : colours.unplayed
+      : upcoming
+        ? UPCOMING
+        : lit
+          ? PLAYED
+          : UNPLAYED;
     context.fillRect(x, baseline - up, BAR_WIDTH, up);
-    context.fillStyle = upcoming
-      ? UPCOMING_REFLECTION
-      : lit
-        ? PLAYED_REFLECTION
-        : UNPLAYED_REFLECTION;
+    context.fillStyle = colours
+      ? upcoming
+        ? colours.upcomingReflection
+        : lit
+          ? colours.playedReflection
+          : colours.unplayedReflection
+      : upcoming
+        ? UPCOMING_REFLECTION
+        : lit
+          ? PLAYED_REFLECTION
+          : UNPLAYED_REFLECTION;
     context.fillRect(x, baseline + 1, BAR_WIDTH, down);
+  }
+
+  if (transitionAt !== undefined) {
+    context.fillStyle = '#ffd600';
+    const x = Math.min(width - 2, Math.max(0, (transitionAt * width) - 1));
+    context.fillRect(x, 0, 2, height);
   }
 
   if (markers) {

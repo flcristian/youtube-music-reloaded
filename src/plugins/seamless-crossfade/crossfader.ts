@@ -21,6 +21,8 @@ import {
   type SeamlessCrossfadeConfig,
   type TransitionOverride,
   type TransitionStyle,
+  FILTER_STOP_BRAKE,
+  lengthFor,
 } from './settings';
 
 import type { MirrorManager, StreamMirror } from './mirror';
@@ -89,6 +91,14 @@ const ECHO_BEATS = 8;
 const ECHO_MIN = 2;
 const ECHO_MAX = 8;
 const ECHO_DEFAULT = 4;
+/** Tape stop + filter in: the voice-only part, in beats and seconds… */
+const VOICE_BEATS = 4;
+const VOICE_MIN = 1.5;
+const VOICE_MAX = 3;
+/** …and the pause after the stop, in beats and seconds. */
+const PAUSE_BEATS = 1;
+const PAUSE_MIN = 0.3;
+const PAUSE_MAX = 0.8;
 /** Drop sync: not worth skipping less than this much of an intro (s). */
 const MIN_DROP_SKIP = 3;
 /** Loop out: the longest loop, in beats (a bar). */
@@ -171,6 +181,17 @@ const getRepeatMode = () => {
   }
 };
 
+/** A transition between two songs, as it runs. */
+export interface Transition {
+  style: TransitionStyle;
+  /** Seconds. */
+  length: number;
+  /** `performance.now()` when it started. */
+  startedAt: number;
+  /** The song leaving: its id, its element, media time minus song time. */
+  outgoing: { videoId: string; audio: HTMLMediaElement; shift: number };
+}
+
 interface Tail {
   pause: () => void;
   resume: () => void;
@@ -194,6 +215,8 @@ interface Tail {
  */
 export class Crossfader {
   private readonly tails = new Set<Tail>();
+  /** The latest transition (for the transition view). */
+  private lastTransition?: Transition;
   /** The user's volume while a fade-in is running (the player's view). */
   private target?: number;
   private fadeIn?: {
@@ -295,6 +318,14 @@ export class Crossfader {
   ) => TransitionOverride | undefined;
   /** Shapes an element's sound (EQ and filters). */
   shape?: (element: HTMLMediaElement, shape: Shape) => void;
+  /** The transition running now, if any (for the transition view). */
+  get transition(): Transition | undefined {
+    const running = this.tails.size > 0 || this.fadeIn !== undefined;
+    return running ? this.lastTransition : undefined;
+  }
+
+  /** Whether this song's part was chosen to start from its drop. */
+  wantsDrop?: (videoId: string) => boolean;
   /** Start this (next) song at `start` seconds (drop sync). */
   startNextAt?: (videoId: string, start: number) => void;
   /** Loop out: repeat `length` seconds of it after `after` seconds. */
@@ -314,7 +345,10 @@ export class Crossfader {
       ? this.transitionFor?.(incoming, consume)
       : undefined;
     const style = chosen?.style ?? settings.transitionStyle;
-    return { style, length: chosen?.length ?? this.fadeLength(seconds, style) };
+    return {
+      style,
+      length: lengthFor(style, chosen?.length ?? this.fadeLength(seconds, style)),
+    };
   }
 
   /** Where a queued song will start (it's held silent until then). */
@@ -415,7 +449,7 @@ export class Crossfader {
       ].find((id) => id && !(outgoingId && sameSong(id, outgoingId)));
       const chosen = jump?.override;
       const transition = chosen
-        ? { style: chosen.style, length: chosen.length }
+        ? { style: chosen.style, length: lengthFor(chosen.style, chosen.length) }
         : this.transitionInto(
             incoming,
             true,
@@ -429,7 +463,9 @@ export class Crossfader {
       const fade = transition.length;
       const dropTarget = jump ? jump.videoId : incoming;
       const dropped =
-        !!dropTarget && settings.dropSync && this.syncDrop(dropTarget, fade);
+        !!dropTarget &&
+        (settings.dropSync || !!this.wantsDrop?.(dropTarget)) &&
+        this.syncDrop(dropTarget, fade);
 
       const mirror = this.mirrors.current;
       const time = video.currentTime;
@@ -446,8 +482,15 @@ export class Crossfader {
         time,
       );
       // Echoes and loops carry on past the end of the song's audio.
+      // Tape stop + filter in: the outgoing song's part comes first (voice
+      // only, the stop, a pause); `fade` is the next song's filter-in.
+      const stopFirst =
+        style === 'stop-filter' ? this.stopThenFilter() : undefined;
+      const outLength = stopFirst ? stopFirst.out : fade;
       const pastEnd = style === 'echo-out' || style === 'loop-out';
-      const tailLength = pastEnd ? fade : Math.min(fade, songEnd - time);
+      const tailLength = pastEnd
+        ? outLength
+        : Math.min(outLength, songEnd - time);
       if (!(tailLength > 0.3)) {
         this.finishFadeIn();
         return;
@@ -461,7 +504,8 @@ export class Crossfader {
       // It keeps its loudness level on its own element.
       this.handOff?.(mirror.audio);
       tailStarted = true;
-      const brake = style === 'tape-stop';
+      // No beat matching when the songs don't play together in time.
+      const brake = style === 'tape-stop' || style === 'stop-filter';
       const outgoing = this.playing;
       const tempo = outgoing && tempoCache.get(outgoing.videoId);
       this.beatSync =
@@ -476,6 +520,14 @@ export class Crossfader {
               skipped: 0,
             }
           : undefined;
+      if (outgoing) {
+        this.lastTransition = {
+          style,
+          length: stopFirst ? stopFirst.out + stopFirst.pause + fade : fade,
+          startedAt: performance.now(),
+          outgoing: { videoId: outgoing.videoId, audio: mirror.audio, shift: outgoing.shift },
+        };
+      }
       this.playTail(mirror, {
         time,
         startVolume,
@@ -493,6 +545,8 @@ export class Crossfader {
         // From its drop instead (asked for by the song's start below).
         dropped ? undefined : jump?.startAt,
         style,
+        // Silent until the outgoing song has stopped (and the pause).
+        stopFirst ? stopFirst.out + stopFirst.pause : 0,
       );
     } catch (err) {
       console.warn('[seamless-crossfade]', err);
@@ -584,14 +638,26 @@ export class Crossfader {
           ? this.userVolume() / options.userVolumeAtStart
           : 0;
       // Tape stop: stays up while it slows down, gone as it stops.
+      // Filter + tape stop: the filter thins it out, then the same stop.
       const level = late
         ? 1
         : brake
           ? 1 - (progress ** 4)
-          : options.curve.out(progress);
+          : stopAtEnd
+            ? 1 - (Math.max(0, (progress - brakeFrom) / (1 - brakeFrom)) ** 4)
+            : options.curve.out(progress);
       const value = options.startVolume * scale * level;
       return Math.min(1, Math.max(0, value));
     };
+
+    // Filter + tape stop: the filter all along, then it brakes to a halt
+    // in its last seconds (no longer beat-matched by then).
+    const stopAtEnd =
+      options.style === 'filter-stop' || options.style === 'stop-filter';
+    const brakeFrom = stopAtEnd
+      ? Math.max(0, 1 - (FILTER_STOP_BRAKE / options.length))
+      : 1;
+    let braking: { rate: number } | undefined;
 
     let elapsed = 0;
     let last = performance.now();
@@ -605,11 +671,23 @@ export class Crossfader {
       this.steer(audio);
       last = now;
       const own = Math.min(1, elapsed / 1000 / options.length);
-      progress = brake
-        ? own
-        : Math.max(progress, this.outgoingProgress(options.curve, own));
+      progress =
+        brake || stopAtEnd
+          ? own
+          : Math.max(progress, this.outgoingProgress(options.curve, own));
       if (brake) {
         const rate = options.playbackRate * ((1 - progress) ** 1.5);
+        if (rate < BRAKE_LOWEST_RATE) progress = 1;
+        else audio.playbackRate = rate;
+      }
+      if (stopAtEnd && progress >= brakeFrom && progress < 1) {
+        if (!braking) {
+          braking = { rate: audio.playbackRate };
+          if (this.beatSync?.audio === audio) this.beatSync = undefined;
+          audio.preservesPitch = false;
+        }
+        const share = (progress - brakeFrom) / (1 - brakeFrom);
+        const rate = braking.rate * ((1 - share) ** 1.5);
         if (rate < BRAKE_LOWEST_RATE) progress = 1;
         else audio.playbackRate = rate;
       }
@@ -646,9 +724,16 @@ export class Crossfader {
     /** Stay silent until the new song is at this position (Play from…). */
     startAt?: number,
     style: TransitionStyle = 'fade',
+    /**
+     * Stay silent this many seconds after it starts playing, then go back
+     * to where it started and fade in from there (Tape stop + filter in).
+     */
+    silentFor = 0,
   ) {
     const { video } = this;
     this.style = style;
+    /** Its start, how long it has waited there, and whether it went back. */
+    let hold: { at: number; waited: number; back: boolean } | undefined;
     this.shape?.(video, incomingShape(style, 0));
     this.target = target;
     this.fadeIn = { waited: 0, duration, curve };
@@ -680,8 +765,23 @@ export class Crossfader {
         positioned;
 
       if (fadeIn.elapsed === undefined) {
-        // Still silent: first move it onto the outgoing song's beat.
-        if (playing && this.alignBeats()) {
+        if (silentFor > 0 && playing) {
+          // Wait for the outgoing song to stop, then start over from its
+          // chosen start (no beat matching: they don't overlap).
+          hold ??= { at: this.api.getCurrentTime(), waited: 0, back: false };
+          if (hold.waited < silentFor * 1000) {
+            if (!this.userPaused) hold.waited += dt;
+            setVolume(video, 0);
+            return true;
+          }
+          if (!hold.back) {
+            hold.back = true;
+            this.api.seekTo(hold.at);
+            setVolume(video, 0);
+            return true;
+          }
+        } else if (playing && this.alignBeats()) {
+          // Still silent: first move it onto the outgoing song's beat.
           setVolume(video, 0);
           return true;
         }
@@ -907,6 +1007,19 @@ export class Crossfader {
   }
 
   /**
+   * Tape stop + filter in, for the playing song: how long it plays on
+   * (voice only, then the tape stop) and the pause before the next one.
+   */
+  private stopThenFilter() {
+    const videoId = this.playing?.videoId;
+    const tempo = videoId ? tempoCache.get(videoId) : undefined;
+    const beat = tempo ? 60 / tempo.bpm : 0.5;
+    const voice = Math.min(VOICE_MAX, Math.max(VOICE_MIN, VOICE_BEATS * beat));
+    const pause = Math.min(PAUSE_MAX, Math.max(PAUSE_MIN, PAUSE_BEATS * beat));
+    return { out: voice + FILTER_STOP_BRAKE, pause };
+  }
+
+  /**
    * Drop sync: start `incoming` so its drop lands as the `fade`-second
    * transition ends, whatever start was chosen for it. False if it has no
    * clear drop (or its intro is about as long as the transition).
@@ -948,6 +1061,23 @@ export class Crossfader {
     loadTempo(next).catch(() => {});
   }
 
+  /**
+   * How long before the playing song's end the change to the next one
+   * starts (seconds; undefined without automatic crossfade).
+   */
+  transitionLead() {
+    const settings = this.getSettings();
+    if (!settings.autoEnabled) return undefined;
+    const planned = this.transitionInto(
+      this.plannedNext,
+      false,
+      settings.autoDuration,
+    );
+    return planned.style === 'stop-filter'
+      ? this.stopThenFilter().out
+      : planned.length;
+  }
+
   /** Automatic crossfade: skip `autoDuration` seconds before the song ends. */
   private readonly onTimeUpdate = () => {
     const { video, api } = this;
@@ -968,7 +1098,12 @@ export class Crossfader {
     if (!mirror) return;
 
     const next = this.plannedNext;
-    const fade = this.transitionInto(next, false, settings.autoDuration).length;
+    const planned = this.transitionInto(next, false, settings.autoDuration);
+    // Tape stop + filter in: the playing song stops at its end.
+    const fade =
+      planned.style === 'stop-filter'
+        ? this.stopThenFilter().out
+        : planned.length;
     const time = video.currentTime;
     const songStart = time - api.getCurrentTime();
     const end = this.songEnd(

@@ -4,10 +4,16 @@
  */
 import { t } from '@/i18n';
 import { drawWaveform } from '@/plugins/waveform-seekbar/draw';
-import { loadPeaks } from '@/plugins/waveform-seekbar/peaks';
-import { tempoCache } from '@/plugins/waveform-seekbar/tempo';
+import { loudnessCache } from '@/plugins/waveform-seekbar/loudness';
+import { loadPeaks, loadTempo } from '@/plugins/waveform-seekbar/peaks';
+import {
+  keysFit,
+  type Tempo,
+  tempoCache,
+} from '@/plugins/waveform-seekbar/tempo';
 
 import { bestPartStart, loadReplayGraph } from './best-part';
+import { findDrop } from './drop';
 import { snapPart } from './part-snap';
 import { versionsOf } from './queue';
 import {
@@ -108,6 +114,11 @@ const queueItem = (listbox: Element, position: InsertPosition) =>
 export interface Interval {
   start: number;
   end?: number;
+  /**
+   * Chosen with "Drop": start it so its drop (`start`) lands as the
+   * transition into it ends.
+   */
+  fromDrop?: boolean;
 }
 
 /** A title without case, accents or punctuation, for comparing. */
@@ -376,6 +387,8 @@ export class PlayFrom {
   ) => void;
   /** Transitions chosen for queued songs (the transition into them). */
   private readonly transitions = new Map<string, TransitionOverride>();
+  /** Of those, the ones DJ shuffle chose (the user's own take precedence). */
+  private readonly autoTransitions = new Set<string>();
   /** Stops keeping the open dropdown placed. */
   private unplace?: () => void;
 
@@ -449,13 +462,45 @@ export class PlayFrom {
       : undefined;
   }
 
+  /** Whether this song's part was chosen with "Drop" (drop sync it). */
+  wantsDrop(videoId: string) {
+    const playNow = this.playNow;
+    if (
+      playNow &&
+      performance.now() - playNow.at < ENSURE_TIMEOUT &&
+      versionsOf(videoId).includes(playNow.key)
+    ) {
+      return !!playNow.interval.fromDrop;
+    }
+    return !!this.findScheduled(videoId)?.interval.fromDrop;
+  }
+
+  /**
+   * DJ shuffle's choice of transition into this song (unless one was
+   * chosen for it in "Play from…").
+   */
+  suggestTransition(videoId: string, transition: TransitionOverride) {
+    const own = versionsOf(videoId).some(
+      (id) => this.transitions.has(id) && !this.autoTransitions.has(id),
+    );
+    if (own) return;
+    // Only its latest pick counts (an earlier next song may have moved).
+    for (const id of this.autoTransitions) this.transitions.delete(id);
+    this.autoTransitions.clear();
+    this.transitions.set(videoId, transition);
+    this.autoTransitions.add(videoId);
+  }
+
   /** The transition chosen for the change into this song, if any. */
   transitionFor(videoId: string, consume: boolean) {
     // Chosen for whichever version of the song was in the menu.
     for (const id of versionsOf(videoId)) {
       const chosen = this.transitions.get(id);
       if (!chosen) continue;
-      if (consume) this.transitions.delete(id);
+      if (consume) {
+        this.transitions.delete(id);
+        this.autoTransitions.delete(id);
+      }
       return chosen;
     }
     return undefined;
@@ -750,6 +795,7 @@ export class PlayFrom {
         ${anchor ? '' : '<div class="cover"><img alt="" /></div>'}
         <canvas class="waveform"></canvas>
         <div class="time"></div>
+        <div class="info"></div>
         <div class="transition">
           <label class="style-label"><span></span><select class="style"></select></label>
           <label class="length-label" hidden>
@@ -759,6 +805,7 @@ export class PlayFrom {
         </div>
         <div class="buttons">
           <button class="secondary best-part" disabled></button>
+          <button class="secondary drop" disabled></button>
           ${anchor ? '' : '<button class="cancel"></button>'}
           <button class="secondary queue-end"></button>
           <button class="secondary queue-next"></button>
@@ -781,6 +828,34 @@ export class PlayFrom {
     const bestPartButton = $<HTMLButtonElement>('.best-part');
     bestPartButton.textContent = t(key('best-part'));
     bestPartButton.title = t(key('best-part-loading'));
+    const dropButton = $<HTMLButtonElement>('.drop');
+    dropButton.textContent = t(key('drop'));
+    dropButton.title = t(key('drop-loading'));
+    /** Where its drop is (song seconds), once analysed. */
+    let drop: number | undefined;
+    /** The selection was made with "Drop" (and not changed since). */
+    let fromDrop = false;
+    // Its tempo and key, and whether its key mixes with the playing song's.
+    const info = $<HTMLElement>('.info');
+    const showInfo = (tempo: Tempo | undefined) => {
+      if (!tempo) return;
+      const parts = [`${Math.round(tempo.bpm)} BPM`];
+      const songKey = tempo.key;
+      if (songKey) parts.push(`${songKey.camelot} (${songKey.name})`);
+      info.textContent = parts.join(' · ');
+      const playingId = this.api.getVideoData()?.video_id;
+      const playingKey = playingId
+        ? tempoCache.get(playingId)?.key
+        : undefined;
+      if (!songKey || !playingKey || playingId === videoId) return;
+      const fits = keysFit(songKey, playingKey);
+      const match = document.createElement('span');
+      match.className = fits ? 'fits' : 'clashes';
+      match.textContent = t(key(fits ? 'key-fits' : 'key-clashes'), {
+        key: playingKey.camelot,
+      });
+      info.append(' · ', match);
+    };
     queueButtons[0][0].textContent = t(key('play-next'));
     queueButtons[1][0].textContent = t(key('add-to-queue'));
 
@@ -824,7 +899,8 @@ export class PlayFrom {
     let start = 0;
     /** `undefined`: until the song's end. */
     let end: number | undefined;
-    const interval = (): Interval => ({ start, end });
+    const interval = (): Interval =>
+      fromDrop ? { start, end, fromDrop } : { start, end };
     const endOrLength = () => end ?? length;
     let peaks: Float32Array | undefined;
     let graph: Awaited<ReturnType<typeof loadReplayGraph>>;
@@ -869,6 +945,7 @@ export class PlayFrom {
     let handle: 'start' | 'end' = 'start';
     const pick = (event: PointerEvent) => {
       if (!length) return;
+      fromDrop = false;
       const at = timeAt(event);
       if (handle === 'start') {
         start = Math.min(at, endOrLength() - MIN_INTERVAL);
@@ -897,8 +974,23 @@ export class PlayFrom {
     });
 
     // Keeps the selection's length if it was narrowed, otherwise 2 minutes.
+    dropButton.addEventListener('click', () => {
+      if (!length || drop === undefined) return;
+      const selected = endOrLength() - start;
+      const seconds =
+        selected < length - 1
+          ? selected
+          : Math.min(this.bestPartLength(), length);
+      start = drop;
+      const value = start + seconds;
+      end = value >= length - 0.5 ? undefined : value;
+      fromDrop = true;
+      update();
+    });
+
     bestPartButton.addEventListener('click', () => {
       if (!length || !graph) return;
+      fromDrop = false;
       const selected = endOrLength() - start;
       const seconds =
         selected < length - 1
@@ -952,11 +1044,29 @@ export class PlayFrom {
       .catch(() => {});
 
     // Not played recently: a hidden muted player loads it in the background.
+    // Its drop, tempo and key, once analysed.
+    const showAnalysis = () => {
+      if (this.modal !== host) return;
+      const tempo = tempoCache.get(videoId);
+      const blocks = loudnessCache.get(videoId);
+      drop = tempo && blocks ? findDrop(tempo, blocks) : undefined;
+      showInfo(tempo ?? undefined);
+      dropButton.disabled = drop === undefined;
+      dropButton.title =
+        drop === undefined ? t(key('drop-none')) : t(key('drop-help'));
+      update();
+    };
     loadPeaks(videoId)
-      .then((loaded) => {
+      .then(async (loaded) => {
         if (this.modal !== host || !loaded) return;
         peaks = loaded;
         update();
+        // Its waveform can outlive its analysis (they're kept apart):
+        // analyse it again.
+        if (!tempoCache.has(videoId) || !loudnessCache.has(videoId)) {
+          await loadTempo(videoId);
+        }
+        showAnalysis();
       })
       .catch(() => {});
 
@@ -998,6 +1108,7 @@ export class PlayFrom {
     data: unknown,
     override?: TransitionOverride,
   ) {
+    this.autoTransitions.delete(videoId);
     if (override) this.transitions.set(videoId, override);
     else this.transitions.delete(videoId);
     const item = document.createElement(
@@ -1192,6 +1303,10 @@ const styles = `
   .waveform { display: block; width: 100%; height: 72px; margin-top: 16px; cursor: pointer; touch-action: none; }
   .time { margin-top: 6px; font-size: 13px; color: rgba(255, 255, 255, 0.7); font-variant-numeric: tabular-nums; }
   .buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  /* Its space is kept while empty, so the dropdown doesn't grow later. */
+  .info { min-height: 16px; margin-top: 4px; font-size: 12px; line-height: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: rgba(255, 255, 255, 0.55); font-variant-numeric: tabular-nums; }
+  .info .fits { color: #7bd88f; }
+  .info .clashes { color: #ffb86b; }
   .transition { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 10px; font-size: 13px; color: rgba(255, 255, 255, 0.7); }
   .transition label { display: flex; align-items: center; gap: 8px; }
   /* Hidden but keeping its space: the dropdown keeps its size. */

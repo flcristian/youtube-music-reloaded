@@ -807,14 +807,29 @@
         "progress": "Se caută cele mai bune părți… {{done}}/{{total}}",
         "queueing": "Se adaugă în coadă… {{done}}/{{total}}",
         "shuffle": "Amestecă cele mai bune părți",
-        "shuffle-play": "Amestecă"
+        "shuffle-play": "Amestecă",
+        "dj-shuffle": "Amestecare DJ",
+        "dj-shuffle-parts": "Amestecare DJ, cele mai bune părți"
       },
       "description": "Crossfade la fiecare schimbare de piesă: piesa pe care o lași continuă și scade în volum, iar următoarea crește. Refolosește audio-ul deja descărcat, fără stream-uri în plus. Setări: Cmd+Shift+.",
       "name": "Seamless Crossfade",
+      "transition": {
+        "idle": "Următoarea tranziție",
+        "in": "Intră",
+        "out": "Pleacă",
+        "next": "Urmează",
+        "playing": "Se redă"
+      },
       "play-from": {
         "add-to-queue": "Adaugă în coadă",
         "best-part": "Cea mai bună parte",
         "best-part-help": "Selectează partea reascultată cel mai des pe YouTube (păstrează lungimea selectată sau folosește „Lungimea celei mai bune părți” din setări)",
+        "drop": "Drop",
+        "key-clashes": "tonalitatea nu se potrivește cu piesa curentă ({{key}})",
+        "key-fits": "tonalitatea se potrivește cu piesa curentă ({{key}})",
+        "drop-help": "Selectează de la drop-ul piesei: pornește exact cât să cadă drop-ul la finalul tranziției",
+        "drop-loading": "Se analizează piesa…",
+        "drop-none": "Nu s-a găsit un drop clar în această piesă",
         "best-part-loading": "Se încarcă datele de reascultare…",
         "best-part-none": "Nu există date de reascultare pentru această melodie",
         "cancel": "Anulează",
@@ -845,6 +860,7 @@
         "loudness-matching": "Același volum pentru toate piesele",
         "fade-in-beats": "Durata crossfade-ului în bătăi (secunde când piesa nu are un ritm clar)",
         "fade-beats": "Bătăi",
+        "transition-view": "Arată vizualizarea tranzițiilor (Cmd+Shift+T)",
         "drop-sync": "Sincronizare drop: drop-ul următoarei melodii cade la finalul tranziției",
         "style": {
           "label": "Stilul tranziției",
@@ -853,7 +869,9 @@
           "filter": "Filtru",
           "bass-swap": "Schimb de bas",
           "echo-out": "Ecou final",
-          "loop-out": "Buclă finală"
+          "loop-out": "Buclă finală",
+          "filter-stop": "Filtru + oprire de bandă",
+          "stop-filter": "Oprire de bandă + filtru la intrare"
         }
       }
     },

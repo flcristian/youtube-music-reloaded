@@ -38,6 +38,9 @@ export const FLAT: Shape = {
   echoTime: 0.5,
 };
 
+/** Tape stop + filter in: the outgoing song's voice range, in Hz. */
+const VOICE_LOW = 300;
+const VOICE_HIGH = 3500;
 /** A band "killed" on a DJ mixer. */
 const KILL = -30;
 /** When the basslines are swapped (share of the transition). */
@@ -63,6 +66,7 @@ export const outgoingShape = (
   const swapped = progress >= SWAP;
   switch (style) {
     case 'filter':
+    case 'filter-stop':
       // Thins out from the bottom up; its bass goes at the swap.
       return {
         ...FLAT,
@@ -90,6 +94,16 @@ export const outgoingShape = (
         highPass: sweep(20, 800, (progress - ECHO_CUT) / (1 - ECHO_CUT)),
       };
     }
+    case 'stop-filter': {
+      // Narrowed to the voice range (no bass, no highs), quickly.
+      const share = Math.min(1, progress * 3);
+      return {
+        ...FLAT,
+        low: KILL * share,
+        highPass: sweep(20, VOICE_LOW, share),
+        lowPass: sweep(OPEN_LOW_PASS, VOICE_HIGH, share),
+      };
+    }
     case 'loop-out':
       // The loop fades out, thinning out in its second half.
       return {
@@ -110,6 +124,8 @@ export const incomingShape = (
   const swapped = progress >= SWAP;
   switch (style) {
     case 'filter':
+    case 'filter-stop':
+    case 'stop-filter':
       // Muffled at first, opening up; its bass comes in at the swap.
       return {
         ...FLAT,

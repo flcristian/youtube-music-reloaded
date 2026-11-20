@@ -95,6 +95,11 @@ export const renderSettings = (
     onChange: (beats) => save({ fadeBeats: beats }),
   });
   fadeBeats.setDisabled(!config.fadeInBeats);
+  const transitionView = createToggle({
+    label: t(key('transition-view')),
+    checked: config.transitionView,
+    onChange: (value) => save({ transitionView: value }),
+  });
   const dropSync = createToggle({
     label: t(key('drop-sync')),
     checked: config.dropSync,
@@ -179,6 +184,8 @@ export const renderSettings = (
       { value: 'bass-swap', label: t(key('style.bass-swap')) },
       { value: 'echo-out', label: t(key('style.echo-out')) },
       { value: 'loop-out', label: t(key('style.loop-out')) },
+      { value: 'filter-stop', label: t(key('style.filter-stop')) },
+      { value: 'stop-filter', label: t(key('style.stop-filter')) },
     ],
     onChange: (value) => save({ transitionStyle: value }),
   });
@@ -198,6 +205,7 @@ export const renderSettings = (
     fadeInBeats.row,
     fadeBeats.row,
     dropSync.row,
+    transitionView.row,
     askOnPlay.row,
     bestPartLength.row,
     bestPartsAll.row,

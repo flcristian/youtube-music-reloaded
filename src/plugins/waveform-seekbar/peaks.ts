@@ -1,5 +1,6 @@
 import { measureLoudness, rememberLoudness } from './loudness';
 import { analyzeTempo, rememberTempo, tempoCache } from './tempo';
+import { measureVocals, rememberVocals } from './vocals';
 
 /** Number of bars computed per song (resampled to the canvas width). */
 export const PEAK_COUNT = 1000;
@@ -113,6 +114,7 @@ export const computePeaks = async (source: AudioSource, videoId?: string) => {
   if (videoId) {
     rememberTempo(videoId, (await analyzeTempo(audio)) ?? null);
     rememberLoudness(videoId, measureLoudness(audio));
+    rememberVocals(videoId, await measureVocals(audio));
   }
 
   const channels = Array.from({ length: audio.numberOfChannels }, (_, i) =>

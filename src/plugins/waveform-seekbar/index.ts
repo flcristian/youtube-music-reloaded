@@ -4,6 +4,7 @@ import { createPlugin } from '@/utils';
 
 import { backend } from './backend';
 import { SOURCE_CHANNEL } from './channel';
+import { loadSung } from './lyrics';
 import {
   AudioSources,
   computePeaks,
@@ -11,6 +12,7 @@ import {
   rememberPeaks,
   setUrlResolver,
 } from './peaks';
+import { guessSung } from './vocals';
 import { Waveform } from './waveform';
 
 import type { MusicPlayer } from '@/types/music-player';
@@ -38,6 +40,8 @@ export default createPlugin<
     api?: MusicPlayer;
     waveform?: Waveform;
     songId?: string;
+    /** Whether the playing song has timed lyrics (else: guessed). */
+    timedLyrics?: boolean;
     onKeyDown?: (event: KeyboardEvent) => void;
     onTimeUpdate?: () => void;
     video?: HTMLVideoElement;
@@ -129,6 +133,15 @@ export default createPlugin<
       if (songId !== this.songId) {
         this.songId = songId;
         waveform.setPeaks(peaksCache.get(songId));
+        waveform.setSung([]);
+        this.timedLyrics = undefined;
+        const data = api.getVideoData();
+        // Timed lyrics, else a guess from its audio (once analysed).
+        loadSung(songId, data?.title, data?.author).then((sung) => {
+          if (this.songId !== songId) return;
+          this.timedLyrics = sung.length > 0;
+          waveform.setSung(sung.length ? sung : guessSung(songId));
+        });
       }
       if (peaksCache.has(songId) || this.loading.has(songId)) return;
 
@@ -143,7 +156,9 @@ export default createPlugin<
       computePeaks(source, songId)
         .then((peaks) => {
           rememberPeaks(songId, peaks);
-          if (this.songId === songId) waveform.setPeaks(peaks);
+          if (this.songId !== songId) return;
+          waveform.setPeaks(peaks);
+          if (!this.timedLyrics) waveform.setSung(guessSung(songId));
         })
         .catch((err) => console.warn('[waveform-seekbar]', err))
         .finally(() => this.loading.delete(songId));

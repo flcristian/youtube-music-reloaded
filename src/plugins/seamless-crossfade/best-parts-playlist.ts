@@ -208,6 +208,13 @@ const menuStyles = `
   svg { fill: currentColor; flex: none; }
 `;
 
+interface RunOptions {
+  /** Arrange the songs to mix well (DJ shuffle). */
+  dj: boolean;
+  /** Only each song's best part (else whole songs). */
+  parts: boolean;
+}
+
 export class BestPartsPlaylist {
   private observer?: MutationObserver;
   private items: HTMLElement[] = [];
@@ -233,6 +240,8 @@ export class BestPartsPlaylist {
       partLength: () => number;
       /** Songs per run (`undefined`: the whole playlist). */
       songCount: () => number | undefined;
+      /** Arrange these queued songs as they play (DJ shuffle). */
+      djShuffle: (videoIds: string[]) => void;
     },
   ) {}
 
@@ -247,6 +256,12 @@ export class BestPartsPlaylist {
       this.createItem(PLAY_ICON, t(key('play')), () => this.startRun(false)),
       this.createItem(SHUFFLE_ICON, t(key('shuffle')), () =>
         this.startRun(true),
+      ),
+      this.createItem(SHUFFLE_ICON, t(key('dj-shuffle')), () =>
+        this.startRun(true, this.playlistId, { dj: true, parts: false }),
+      ),
+      this.createItem(SHUFFLE_ICON, t(key('dj-shuffle-parts')), () =>
+        this.startRun(true, this.playlistId, { dj: true, parts: true }),
       ),
     ];
     this.observer = new MutationObserver(() => this.addToMenu());
@@ -283,8 +298,14 @@ export class BestPartsPlaylist {
     listbox.prepend(...this.items);
   }
 
-  private startRun(shuffle: boolean, playlistId = this.playlistId) {
-    if (playlistId) this.start(playlistId, shuffle).catch(console.warn);
+  private startRun(
+    shuffle: boolean,
+    playlistId = this.playlistId,
+    options: RunOptions = { dj: false, parts: true },
+  ) {
+    if (playlistId) {
+      this.start(playlistId, shuffle, options).catch(console.warn);
+    }
   }
 
   /** The whole playlist, shuffled (YouTube Music's own shuffled play). */
@@ -319,6 +340,16 @@ export class BestPartsPlaylist {
       [SHUFFLE_ICON, t(key('shuffle-play')), () => this.shufflePlay(playlistId)],
       [PLAY_ICON, t(key('play')), () => this.startRun(false, playlistId)],
       [SHUFFLE_ICON, t(key('shuffle')), () => this.startRun(true, playlistId)],
+      [
+        SHUFFLE_ICON,
+        t(key('dj-shuffle')),
+        () => this.startRun(true, playlistId, { dj: true, parts: false }),
+      ],
+      [
+        SHUFFLE_ICON,
+        t(key('dj-shuffle-parts')),
+        () => this.startRun(true, playlistId, { dj: true, parts: true }),
+      ],
     ];
     for (const [icon, label, action] of actions) {
       const button = document.createElement('button');
@@ -380,9 +411,15 @@ export class BestPartsPlaylist {
     return item;
   }
 
-  private async start(playlistId: string, shuffle: boolean) {
+  private async start(
+    playlistId: string,
+    shuffle: boolean,
+    options: RunOptions,
+  ) {
     const run = ++this.run;
     const stale = () => run !== this.run;
+    // A new run replaces an earlier DJ shuffle.
+    this.player.djShuffle([]);
     this.showSpinner(t(key('loading')));
     try {
       const all = await playlistTracks(playlistId);
@@ -398,6 +435,10 @@ export class BestPartsPlaylist {
       if (!tracks.length) throw new Error('Empty playlist');
 
       const parts = new Map<string, Interval>();
+      // Whole songs: no parts to find.
+      if (!options.parts) {
+        for (const track of tracks) parts.set(track.videoId, { start: 0 });
+      }
       const partLength = this.player.partLength();
       let done = 0;
       const progress = () =>
@@ -407,8 +448,8 @@ export class BestPartsPlaylist {
             total: String(tracks.length),
           }),
         );
-      progress();
-      const pending = [...tracks];
+      if (options.parts) progress();
+      const pending = options.parts ? [...tracks] : [];
       const worker = async () => {
         for (let track = pending.shift(); track; track = pending.shift()) {
           const part = await partOf(track, partLength).catch(() => ({
@@ -422,10 +463,12 @@ export class BestPartsPlaylist {
       await Promise.all(Array.from({ length: PARALLEL }, worker));
       if (stale()) return;
 
-      this.player.schedule(
-        parts,
-        new Map(tracks.map((track) => [track.videoId, track.title])),
-      );
+      if (options.parts) {
+        this.player.schedule(
+          parts,
+          new Map(tracks.map((track) => [track.videoId, track.title])),
+        );
+      }
       const [first, ...rest] = tracks;
       this.player.play(first.videoId, parts.get(first.videoId)!);
       // Queue the rest right after it, once it plays (last first, each
@@ -446,6 +489,9 @@ export class BestPartsPlaylist {
       const replaced = await replaceUpNext(
         rest.map((track) => track.videoId),
       ).catch(() => false);
+      if (options.dj && !stale()) {
+        this.player.djShuffle(tracks.map((track) => track.videoId));
+      }
       if (replaced || stale()) return;
       let queued = 0;
       for (const track of [...rest].reverse()) {
