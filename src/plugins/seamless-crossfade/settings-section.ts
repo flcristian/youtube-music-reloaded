@@ -143,6 +143,12 @@ export const renderSettings = (
     },
   });
 
+  const loudnessMatching = createToggle({
+    label: t(key('loudness-matching')),
+    checked: config.loudnessMatching,
+    onChange: (value) => save({ loudnessMatching: value }),
+  });
+
   container.append(
     autoToggle.row,
     autoDuration.row,
@@ -155,5 +161,6 @@ export const renderSettings = (
     bestPartsSongs.row,
     curve.row,
     steepness.row,
+    loudnessMatching.row,
   );
 };

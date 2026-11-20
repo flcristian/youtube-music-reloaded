@@ -251,6 +251,8 @@ export class Crossfader {
   scheduledStart?: (videoId: string | undefined) => number | undefined;
   /** Where the playing song's chosen part starts, once it plays. */
   partStart?: (videoId: string | undefined) => number | undefined;
+  /** The playing song moves to `audio` (loudness matching follows it). */
+  handOff?: (audio: HTMLMediaElement) => void;
   /** A chosen end for the playing song (song seconds), if any. */
   intervalEnd?: (videoId: string | undefined) => number | undefined;
 
@@ -364,6 +366,8 @@ export class Crossfader {
       const target = this.userVolume();
 
       this.mirrors.release();
+      // It keeps its loudness level on its own element.
+      this.handOff?.(mirror.audio);
       tailStarted = true;
       const outgoing = this.playing;
       const tempo = outgoing && tempoCache.get(outgoing.videoId);

@@ -6,6 +6,7 @@ import { createPlugin } from '@/utils';
 
 import { BestPartsPlaylist } from './best-parts-playlist';
 import { Crossfader } from './crossfader';
+import { Leveler } from './leveler';
 import { MirrorManager } from './mirror';
 import { PlayFrom } from './play-from';
 import { defaultConfig, type SeamlessCrossfadeConfig } from './settings';
@@ -28,6 +29,7 @@ export default createPlugin<
     unregisterSettings?: () => void;
     saveConfig?: (changes: Partial<SeamlessCrossfadeConfig>) => void;
     unwatchVideo?: () => void;
+    leveler?: Leveler;
   },
   SeamlessCrossfadeConfig
 >({
@@ -110,6 +112,16 @@ export default createPlugin<
       };
       this.crossfader.intervalEnd = (videoId) =>
         this.playFrom?.intervalEnd(videoId);
+      this.leveler = new Leveler(
+        api,
+        () => this.config.loudnessMatching,
+        () => this.playFrom?.currentPart(),
+      );
+      const leveler = this.leveler;
+      this.crossfader.handOff = (audio) => leveler.handOff(audio);
+      this.mirrors.onMirror = (audio) => leveler.prepare(audio);
+      const playingMirror = this.mirrors.current;
+      if (playingMirror) leveler.prepare(playingMirror.audio);
 
       // For the MCP bridge (and other plugins).
       const playFrom = this.playFrom;
@@ -132,11 +144,13 @@ export default createPlugin<
       this.unwatchVideo = watchVideo((current) => {
         this.crossfader?.setVideo(current);
         this.playFrom?.setVideo(current);
+        this.leveler?.setVideo(current);
       });
     },
 
     stop() {
       this.unwatchVideo?.();
+      this.leveler?.stop();
       registerDjFeatures(undefined);
       this.unregisterSettings?.();
       this.crossfader?.detach();

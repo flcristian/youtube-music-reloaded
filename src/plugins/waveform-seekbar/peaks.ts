@@ -1,3 +1,4 @@
+import { measureLoudness, rememberLoudness } from './loudness';
 import { analyzeTempo, rememberTempo, tempoCache } from './tempo';
 
 /** Number of bars computed per song (resampled to the canvas width). */
@@ -108,9 +109,10 @@ export const computePeaks = async (source: AudioSource, videoId?: string) => {
   const data = await download(source);
   const context = new OfflineAudioContext(1, 1, DECODE_RATE);
   const audio = await context.decodeAudioData(data);
-  // Its beats too, for crossfades (same decode).
+  // Its beats and loudness too, for crossfades (same decode).
   if (videoId) {
     rememberTempo(videoId, analyzeTempo(audio) ?? null);
+    rememberLoudness(videoId, measureLoudness(audio));
   }
 
   const channels = Array.from({ length: audio.numberOfChannels }, (_, i) =>

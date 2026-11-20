@@ -26,6 +26,8 @@ export type SeamlessCrossfadeConfig = {
   bestPartsSongs: number;
   /** "Play/Shuffle best parts" plays the whole playlist. */
   bestPartsAll: boolean;
+  /** Play every song (or part) at the same loudness. */
+  loudnessMatching: boolean;
 };
 
 export const defaultConfig: SeamlessCrossfadeConfig = {
@@ -41,6 +43,7 @@ export const defaultConfig: SeamlessCrossfadeConfig = {
   bestPartLength: 120,
   bestPartsSongs: 50,
   bestPartsAll: false,
+  loudnessMatching: true,
 };
 
 export const MIN_PART_LENGTH = 30;

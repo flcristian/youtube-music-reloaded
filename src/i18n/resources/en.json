@@ -853,7 +853,8 @@
         "duration": "Duration",
         "jump": "Crossfade for \"Play from…\"",
         "manual": "Crossfade when changing songs manually",
-        "outro-steepness": "Outro steepness"
+        "outro-steepness": "Outro steepness",
+        "loudness-matching": "Match loudness between songs"
       }
     },
     "shortcuts": {

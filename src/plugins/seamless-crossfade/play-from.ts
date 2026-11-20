@@ -216,6 +216,48 @@ const playTarget = (event: Event) => {
     return { videoId, watchEndpoint, queueData: rowQueueData(data), anchor };
   }
 
+  // Search's top result: its "Play" button, thumbnail play button or title.
+  const card = path.find(isRendered('YTMUSIC-CARD-SHELF-RENDERER'));
+  if (card) {
+    const button = path.find(isRendered('YT-BUTTON-RENDERER'));
+    const buttonEndpoint = (
+      button?.data?.command as { watchEndpoint?: WatchEndpoint } | undefined
+    )?.watchEndpoint;
+    const playButton = path.find(
+      (node) => node.tagName === 'YTMUSIC-PLAY-BUTTON-RENDERER',
+    );
+    const onTitle = path.some(
+      (node) =>
+        node instanceof HTMLAnchorElement &&
+        (node.getAttribute('href') ?? '').startsWith('watch?'),
+    );
+    if (!buttonEndpoint && !playButton && !onTitle) return undefined;
+    const data = card.data;
+    const watchEndpoint =
+      buttonEndpoint ??
+      (
+        (
+          (
+            (data?.thumbnailOverlay as Record<string, unknown> | undefined)
+              ?.musicItemThumbnailOverlayRenderer as
+              | Record<string, unknown>
+              | undefined
+          )?.content as Record<string, unknown> | undefined
+        )?.musicPlayButtonRenderer as
+          | { playNavigationEndpoint?: { watchEndpoint?: WatchEndpoint } }
+          | undefined
+      )?.playNavigationEndpoint?.watchEndpoint;
+    // Only songs (an artist or album card plays a whole list).
+    const videoId = watchEndpoint?.videoId;
+    if (!videoId) return undefined;
+    return {
+      videoId,
+      watchEndpoint,
+      queueData: rowQueueData(data),
+      anchor: button ?? playButton ?? card,
+    };
+  }
+
   const queueItem = path.find(isRendered('YTMUSIC-PLAYER-QUEUE-ITEM'));
   if (queueItem) {
     const data = queueItem.data;

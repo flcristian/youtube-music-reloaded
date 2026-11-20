@@ -838,7 +838,8 @@
         "duration": "Durată",
         "jump": "Crossfade pentru „Redă de la…”",
         "manual": "Crossfade la schimbarea manuală a piesei",
-        "outro-steepness": "Cât de repede scade piesa veche"
+        "outro-steepness": "Cât de repede scade piesa veche",
+        "loudness-matching": "Același volum pentru toate piesele"
       }
     },
     "shortcuts": {

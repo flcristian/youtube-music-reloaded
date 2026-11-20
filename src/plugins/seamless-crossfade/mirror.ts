@@ -265,6 +265,9 @@ export class MirrorManager {
   private latest?: StreamMirror;
   private origAppend!: SourceBuffer['appendBuffer'];
 
+  /** Called with each new mirror's <audio>, before it ever plays. */
+  onMirror?: (audio: HTMLAudioElement) => void;
+
   constructor(private readonly getPlaybackTime: () => number) {}
 
   /** The mirror of the audio currently fed to the player, if any. */
@@ -384,6 +387,11 @@ export class MirrorManager {
         this.getPlaybackTime,
         (mirrorSb) => this.ours.add(mirrorSb),
       );
+      try {
+        this.onMirror?.(mirror.audio);
+      } catch (err) {
+        console.warn('[seamless-crossfade]', err);
+      }
       // Start from the player's current state.
       mirror.push({ kind: 'windowEnd', value: sb.appendWindowEnd });
       mirror.push({ kind: 'windowStart', value: sb.appendWindowStart });
