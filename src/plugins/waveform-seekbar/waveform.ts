@@ -24,6 +24,7 @@ export class Waveform {
   readonly canvas = document.createElement('canvas');
   private peaks?: Float32Array;
   private sung: Sung[] = [];
+  private sungVisible = true;
   private frame?: number;
   private lastKey = '';
   private dragging: 'seek' | 'end' | undefined;
@@ -53,6 +54,13 @@ export class Waveform {
   /** Where the song is sung (song seconds), shown in blue. */
   setSung(sung: Sung[]) {
     this.sung = sung;
+    this.lastKey = '';
+  }
+
+  /** Whether the sung parts are coloured. */
+  setSungVisible(visible: boolean) {
+    if (visible === this.sungVisible) return;
+    this.sungVisible = visible;
     this.lastKey = '';
   }
 
@@ -112,11 +120,11 @@ export class Waveform {
         : undefined;
     const transitionBar =
       transitionAt === undefined ? -1 : Math.round(transitionAt * width);
-    const key = `${transitionBar}|${width}|${ratio}|${playedBars}|${fromBar}|${toBar}|${this.peaks ? 1 : 0}|${endHandle}|${this.sung.length}|${duration > 0}`;
+    const key = `${transitionBar}|${width}|${ratio}|${playedBars}|${fromBar}|${toBar}|${this.peaks ? 1 : 0}|${endHandle}|${this.sungVisible ? this.sung.length : -1}|${duration > 0}`;
     if (key === this.lastKey) return;
     this.lastKey = key;
     const sung =
-      duration > 0
+      duration > 0 && this.sungVisible
         ? this.sung.map((span) => ({
             from: span.start / duration,
             to: span.end / duration,

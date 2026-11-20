@@ -1054,6 +1054,9 @@
       "name": "Vizualizator"
     },
     "waveform-seekbar": {
+      "settings": {
+        "lyrics": "Colorează părțile cântate (versuri; pe interpret când se știe)"
+      },
       "description": "Afișează toată piesa ca waveform în stil SoundCloud în locul barei de progres, cu partea ascultată evidențiată. Click sau drag pentru a sări. Comutare: Cmd+Shift+V",
       "name": "Waveform în loc de bara de progres"
     }

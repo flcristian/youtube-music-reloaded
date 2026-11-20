@@ -1,4 +1,8 @@
 import { t } from '@/i18n';
+import {
+  createToggle,
+  registerSettingsSection,
+} from '@/plugins/utils/renderer/custom-settings';
 import { watchVideo } from '@/plugins/utils/renderer/video-watcher';
 import { createPlugin } from '@/utils';
 
@@ -21,6 +25,8 @@ type WaveformSeekbarConfig = {
   enabled: boolean;
   /** Waveform shown instead of the progress bar (toggled with Cmd+Shift+V). */
   visible: boolean;
+  /** Sung parts coloured on it (lyrics). */
+  lyrics: boolean;
 };
 
 const isTyping = (target: EventTarget | null) =>
@@ -46,6 +52,7 @@ export default createPlugin<
     onTimeUpdate?: () => void;
     video?: HTMLVideoElement;
     unwatchVideo?: () => void;
+    unregisterSettings?: () => void;
     apply: () => void;
     load: () => void;
   },
@@ -54,11 +61,11 @@ export default createPlugin<
   name: () => t('plugins.waveform-seekbar.name'),
   description: () => t('plugins.waveform-seekbar.description'),
   restartNeeded: false,
-  config: { enabled: true, visible: true },
+  config: { enabled: true, visible: true, lyrics: true },
   backend,
 
   renderer: {
-    config: { enabled: true, visible: true },
+    config: { enabled: true, visible: true, lyrics: true },
     sources: new AudioSources(),
     loading: new Set(),
 
@@ -69,7 +76,25 @@ export default createPlugin<
           ipc.invoke(SOURCE_CHANNEL, videoId) as Promise<string | null>,
       );
       this.setConfig = setConfig;
-      this.config = await getConfig();
+      this.config = { ...this.config, ...(await getConfig()) };
+
+      // In the shared settings modal (Cmd+Shift+.).
+      this.unregisterSettings = registerSettingsSection({
+        id: 'waveform-seekbar',
+        title: () => t('plugins.waveform-seekbar.name'),
+        render: (container) => {
+          const { row } = createToggle({
+            label: t('plugins.waveform-seekbar.settings.lyrics'),
+            checked: this.config.lyrics,
+            onChange: (lyrics) => {
+              this.config = { ...this.config, lyrics };
+              Promise.resolve(this.setConfig?.({ lyrics })).catch(() => {});
+              this.apply();
+            },
+          });
+          container.append(row);
+        },
+      });
 
       this.onKeyDown = (event) => {
         const shortcut =
@@ -114,6 +139,7 @@ export default createPlugin<
       const bar = document.querySelector<HTMLElement>('ytmusic-player-bar');
       const progress = bar?.querySelector<HTMLElement>('#progress-bar');
       if (!bar || !this.waveform) return;
+      this.waveform.setSungVisible(this.config.lyrics);
       if (this.config.visible) {
         if (progress) progress.style.visibility = 'hidden';
         this.waveform.show(bar);
@@ -175,6 +201,7 @@ export default createPlugin<
         this.video?.removeEventListener('timeupdate', this.onTimeUpdate);
       }
       this.video = undefined;
+      this.unregisterSettings?.();
       this.config = { ...this.config, visible: false };
       this.apply();
     },

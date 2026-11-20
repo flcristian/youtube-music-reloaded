@@ -1085,6 +1085,9 @@
       "name": "Visualizer"
     },
     "waveform-seekbar": {
+      "settings": {
+        "lyrics": "Colour the sung parts (lyrics; per singer when known)"
+      },
       "description": "Shows the whole song as a SoundCloud-style waveform instead of the progress bar, with the played part highlighted. Click or drag to seek. Toggle: Cmd+Shift+V",
       "name": "Waveform Seekbar"
     }

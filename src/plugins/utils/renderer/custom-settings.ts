@@ -256,7 +256,9 @@ const styles = `
   }
   .dialog {
     width: min(520px, 100%);
-    max-height: calc(100vh - 32px);
+    /* Fits any window: at most 720px, else the window less a margin. */
+    max-height: min(720px, calc(100vh - 32px));
+    max-height: min(720px, calc(100dvh - 32px));
     display: flex;
     flex-direction: column;
     background: var(--bg);
@@ -286,7 +288,19 @@ const styles = `
     font-size: 16px;
   }
   .close:hover, .close:focus-visible { background: var(--surface); color: var(--text); }
-  .body { padding: 8px 20px 16px; overflow-y: auto; }
+  /* Scrolls (a flex child only shrinks below its content with min-height 0). */
+  .body {
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 8px 20px 16px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  @media (max-height: 480px) {
+    .backdrop { padding: 8px; }
+    .dialog { max-height: calc(100vh - 16px); max-height: calc(100dvh - 16px); }
+    .header { padding: 10px 16px; }
+  }
   .section { padding: 12px 0; }
   .section + .section { border-top: 1px solid var(--border); }
   .section-title {
