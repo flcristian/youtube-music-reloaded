@@ -803,6 +803,7 @@
       "best-parts": {
         "loading": "Se încarcă playlistul…",
         "play": "Redă cele mai bune părți",
+        "play-all": "Redă",
         "progress": "Se caută cele mai bune părți… {{done}}/{{total}}",
         "queueing": "Se adaugă în coadă… {{done}}/{{total}}",
         "shuffle": "Amestecă cele mai bune părți",
@@ -844,6 +845,7 @@
         "loudness-matching": "Același volum pentru toate piesele",
         "fade-in-beats": "Durata crossfade-ului în bătăi (secunde când piesa nu are un ritm clar)",
         "fade-beats": "Bătăi",
+        "drop-sync": "Sincronizare drop: drop-ul următoarei melodii cade la finalul tranziției",
         "style": {
           "label": "Stilul tranziției",
           "fade": "Crossfade",

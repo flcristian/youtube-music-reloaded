@@ -9,6 +9,7 @@ import { tempoCache } from '@/plugins/waveform-seekbar/tempo';
 
 import { bestPartStart, loadReplayGraph } from './best-part';
 import { snapPart } from './part-snap';
+import { versionsOf } from './queue';
 import {
   STYLE_LENGTHS,
   TRANSITION_STYLES,
@@ -129,6 +130,9 @@ const ENSURE_TIMEOUT = 10_000;
 const nearStart = (time: number, start: number) =>
   time >= start - 1.5 && time <= start + 10;
 
+/** Drop sync keeps a chosen end only this far (s) after the new start. */
+const MIN_AFTER_DROP = 30;
+
 /** How long the song must stay at the chosen start to be done, in ms. */
 const SETTLE_TIME = 1000;
 
@@ -144,6 +148,12 @@ const INTERCEPTED_EVENTS = [
 ] as const;
 
 type Rendered = HTMLElement & { data?: Record<string, unknown> };
+
+/** What a play button starts: a song, or a whole playlist. */
+export interface PlayEndpoint {
+  watchEndpoint?: WatchEndpoint & { playlistId?: string };
+  watchPlaylistEndpoint?: { playlistId?: string; params?: string };
+}
 
 /** The "Play next" / "Add to queue" actions in a row's own menu data. */
 const rowQueueData = (data: Record<string, unknown> | undefined) => {
@@ -266,6 +276,56 @@ const playTarget = (event: Event) => {
     };
   }
 
+  // Home page (and similar) cards: a song/video, or a playlist/album.
+  const twoRow = path.find(isRendered('YTMUSIC-TWO-ROW-ITEM-RENDERER'));
+  if (twoRow) {
+    const data = twoRow.data;
+    const play = (
+      (
+        (
+          (data?.thumbnailOverlay as Record<string, unknown> | undefined)
+            ?.musicItemThumbnailOverlayRenderer as
+            | Record<string, unknown>
+            | undefined
+        )?.content as Record<string, unknown> | undefined
+      )?.musicPlayButtonRenderer as
+        | { playNavigationEndpoint?: PlayEndpoint }
+        | undefined
+    )?.playNavigationEndpoint;
+    const navigation = data?.navigationEndpoint as PlayEndpoint | undefined;
+    const playButton = path.find(
+      (node) => node.tagName === 'YTMUSIC-PLAY-BUTTON-RENDERER',
+    );
+    // A song or video: the card itself plays it (not its artist/album links).
+    const song = navigation?.watchEndpoint;
+    if (song?.videoId) {
+      const link = path.find(
+        (node): node is HTMLAnchorElement =>
+          node instanceof HTMLAnchorElement && node.hasAttribute('href'),
+      );
+      if (link && !(link.getAttribute('href') ?? '').startsWith('watch?')) {
+        return undefined;
+      }
+      return {
+        videoId: song.videoId,
+        watchEndpoint: play?.watchEndpoint ?? song,
+        queueData: rowQueueData(data),
+        anchor: playButton ?? twoRow,
+      };
+    }
+    // A playlist or album: only its play button plays it.
+    if (!playButton || !play) return undefined;
+    const playlistId =
+      play.watchPlaylistEndpoint?.playlistId ?? play.watchEndpoint?.playlistId;
+    if (!playlistId) return undefined;
+    return {
+      kind: 'playlist' as const,
+      playlistId,
+      endpoint: play,
+      anchor: playButton,
+    };
+  }
+
   const queueItem = path.find(isRendered('YTMUSIC-PLAYER-QUEUE-ITEM'));
   if (queueItem) {
     const data = queueItem.data;
@@ -300,12 +360,20 @@ export class PlayFrom {
   private readonly bestPartTitles = new Map<string, string>();
   /** "Play from…" (play now): the next song that starts is the chosen one. */
   private playNow?: { interval: Interval; key: string; at: number };
+  /** A start for the next song only (drop sync), if it comes soon. */
+  private oneOff?: { videoId: string; start: number; at: number };
   /** The playing song's chosen end, once it has started. */
   private activePart?: { videoId: string; start: number; end?: number };
   private lastVideoId?: string;
   private video?: HTMLVideoElement;
   private modal?: HTMLElement;
   private cancelEnsure?: () => void;
+  /** A playlist's play button was clicked (shows what to do with it). */
+  onPlaylistPlay?: (
+    playlistId: string,
+    endpoint: PlayEndpoint,
+    anchor: HTMLElement,
+  ) => void;
   /** Transitions chosen for queued songs (the transition into them). */
   private readonly transitions = new Map<string, TransitionOverride>();
   /** Stops keeping the open dropdown placed. */
@@ -316,6 +384,7 @@ export class PlayFrom {
     private readonly prepareCrossfade: (
       startAt: number,
       override?: TransitionOverride,
+      videoId?: string,
     ) => void,
     /** "Choose a part before playing": clicks on play open the modal. */
     private readonly askOnPlay: () => boolean = () => false,
@@ -351,28 +420,45 @@ export class PlayFrom {
   /** Start position for a queued song, while it is waiting to start. */
   scheduledStart(videoId: string | undefined) {
     if (videoId === undefined) return undefined;
+    const oneOff =
+      this.freshOneOff(videoId) ??
+      (this.playNow ? this.freshOneOff(this.playNow.key) : undefined);
+    if (oneOff !== undefined) return oneOff;
     if (this.playNow && performance.now() - this.playNow.at < ENSURE_TIMEOUT) {
       return this.playNow.interval.start;
     }
-    return this.findScheduled(videoId)?.interval.start;
+    return (
+      this.findScheduled(videoId)?.interval.start ?? this.freshOneOff(videoId)
+    );
+  }
+
+  /**
+   * Start this song at `start` if it's the next to play (drop sync), in
+   * place of any start chosen for it.
+   */
+  startNextAt(videoId: string, start: number) {
+    this.oneOff = { videoId, start, at: performance.now() };
+  }
+
+  private freshOneOff(videoId: string) {
+    const oneOff = this.oneOff;
+    return oneOff &&
+      versionsOf(videoId).includes(oneOff.videoId) &&
+      performance.now() - oneOff.at < ENSURE_TIMEOUT
+      ? oneOff.start
+      : undefined;
   }
 
   /** The transition chosen for the change into this song, if any. */
   transitionFor(videoId: string, consume: boolean) {
-    const chosen = this.transitions.get(videoId);
-    if (consume) this.transitions.delete(videoId);
-    return chosen;
-  }
-
-  /** The song after the playing one in the queue. */
-  upcomingVideoId() {
-    const items = [
-      ...document.querySelectorAll<
-        HTMLElement & { data?: { videoId?: string } }
-      >('ytmusic-player-queue-item'),
-    ];
-    const index = items.findIndex((item) => item.hasAttribute('selected'));
-    return index < 0 ? undefined : items[index + 1]?.data?.videoId;
+    // Chosen for whichever version of the song was in the menu.
+    for (const id of versionsOf(videoId)) {
+      const chosen = this.transitions.get(id);
+      if (!chosen) continue;
+      if (consume) this.transitions.delete(id);
+      return chosen;
+    }
+    return undefined;
   }
 
   /**
@@ -491,7 +577,25 @@ export class PlayFrom {
     } else {
       found = this.findScheduled(videoId);
     }
-    const interval = found?.interval;
+    const oneOff =
+      this.freshOneOff(videoId) ??
+      (found ? this.freshOneOff(found.key) : undefined);
+    this.oneOff = undefined;
+    if (!found && oneOff !== undefined) {
+      // Only where it starts: not a part (nothing to show or level).
+      this.ensurePosition(videoId, oneOff);
+      return;
+    }
+    let interval = found?.interval;
+    // Drop sync: from its drop, whatever part was chosen (keeping a chosen
+    // end that is still well after it).
+    if (interval && oneOff !== undefined) {
+      const end =
+        interval.end !== undefined && interval.end > oneOff + MIN_AFTER_DROP
+          ? interval.end
+          : undefined;
+      interval = { start: oneOff, end };
+    }
     if (interval) {
       this.activePart = { videoId, start: interval.start, end: interval.end };
     } else if (this.activePart?.videoId !== videoId) {
@@ -529,6 +633,14 @@ export class PlayFrom {
     if (!this.askOnPlay()) return;
     const target = playTarget(event);
     if (!target) return;
+    if (target.kind === 'playlist') {
+      if (!this.onPlaylistPlay) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (event.type !== 'click') return;
+      this.onPlaylistPlay(target.playlistId, target.endpoint, target.anchor);
+      return;
+    }
     // The playing song's own button pauses/resumes: leave it alone.
     if (target.videoId === this.api.getVideoData()?.video_id) return;
     event.preventDefault();
@@ -964,7 +1076,7 @@ export class PlayFrom {
       startTimeSeconds: Math.floor(seconds),
     };
 
-    this.prepareCrossfade(seconds, override);
+    this.prepareCrossfade(seconds, override, videoId);
     document.querySelector('ytmusic-app')?.dispatchEvent(
       new CustomEvent('yt-navigate', {
         bubbles: true,
@@ -1031,7 +1143,7 @@ export class PlayFrom {
  * Follows its own size (its content loads after it opens) and the window's.
  * Returns a function that stops following.
  */
-const placeDropdown = (dialog: HTMLElement, anchor: HTMLElement) => {
+export const placeDropdown = (dialog: HTMLElement, anchor: HTMLElement) => {
   const margin = 8;
   const gap = 6;
   const place = () => {

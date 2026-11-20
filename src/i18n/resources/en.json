@@ -818,6 +818,7 @@
       "best-parts": {
         "loading": "Loading playlist…",
         "play": "Play best parts",
+        "play-all": "Play",
         "progress": "Finding the best parts… {{done}}/{{total}}",
         "queueing": "Adding to the queue… {{done}}/{{total}}",
         "shuffle": "Shuffle best parts",
@@ -859,6 +860,7 @@
         "loudness-matching": "Match loudness between songs",
         "fade-in-beats": "Crossfade length in beats (seconds when a song has no clear beat)",
         "fade-beats": "Beats",
+        "drop-sync": "Drop sync: the next song's drop lands as the transition ends",
         "style": {
           "label": "Transition style",
           "fade": "Crossfade",

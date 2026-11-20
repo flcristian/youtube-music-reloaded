@@ -1,3 +1,4 @@
+import { loudnessCache } from '@/plugins/waveform-seekbar/loudness';
 import { loadTempo } from '@/plugins/waveform-seekbar/peaks';
 import {
   BAR,
@@ -10,7 +11,9 @@ import {
   type Tempo,
 } from '@/plugins/waveform-seekbar/tempo';
 
+import { findDrop } from './drop';
 import { FLAT, incomingShape, outgoingShape, type Shape } from './eq';
+import { nextInQueue, sameSong, versionsOf } from './queue';
 import {
   clampDuration,
   fadeFor,
@@ -86,6 +89,8 @@ const ECHO_BEATS = 8;
 const ECHO_MIN = 2;
 const ECHO_MAX = 8;
 const ECHO_DEFAULT = 4;
+/** Drop sync: not worth skipping less than this much of an intro (s). */
+const MIN_DROP_SKIP = 3;
 /** Loop out: the longest loop, in beats (a bar). */
 const LOOP_BEATS = 4;
 /** Slowest speed a media element plays at; below it the brake ends. */
@@ -102,31 +107,6 @@ const clamp = (value: number, limit: number) =>
 /** Seconds until the next beat of `grid`, at song time `time`. */
 const toNextBeat = (grid: BeatGrid, time: number) =>
   mod(grid.beat - time, grid.period);
-
-/** The playing song's next song in the queue, if any. */
-const nextInQueue = () => {
-  type Renderer = { videoId?: string; selected?: boolean };
-  type Item = {
-    playlistPanelVideoRenderer?: Renderer;
-    playlistPanelVideoWrapperRenderer?: {
-      primaryRenderer?: { playlistPanelVideoRenderer?: Renderer };
-    };
-  };
-  const queue = document.querySelector<
-    HTMLElement & {
-      queue?: {
-        store?: { store?: { getState(): { queue?: { items?: Item[] } } } };
-      };
-    }
-  >('#queue');
-  const items = queue?.queue?.store?.store?.getState().queue?.items ?? [];
-  const song = (item: Item | undefined) =>
-    item?.playlistPanelVideoRenderer ??
-    item?.playlistPanelVideoWrapperRenderer?.primaryRenderer
-      ?.playlistPanelVideoRenderer;
-  const current = items.findIndex((item) => song(item)?.selected);
-  return current < 0 ? undefined : song(items[current + 1])?.videoId;
-};
 
 /**
  * Lining up the beats of the song fading out (`audio`) with the one fading
@@ -237,6 +217,8 @@ export class Crossfader {
     duration: number;
     startAt: number;
     override?: TransitionOverride;
+    /** The song it plays. */
+    videoId?: string;
   };
   /** The song expected to come next (planned automatic transition). */
   private plannedNext?: string;
@@ -301,8 +283,9 @@ export class Crossfader {
     startAt: number,
     /** A transition chosen for this one song. */
     override?: TransitionOverride,
+    videoId?: string,
   ) {
-    this.jump = { at: performance.now(), duration, startAt, override };
+    this.jump = { at: performance.now(), duration, startAt, override, videoId };
   }
 
   /** A transition chosen for this song (`consume`: it's happening now). */
@@ -310,10 +293,10 @@ export class Crossfader {
     videoId: string,
     consume: boolean,
   ) => TransitionOverride | undefined;
-  /** The song after the playing one in the queue. */
-  upcoming?: () => string | undefined;
   /** Shapes an element's sound (EQ and filters). */
   shape?: (element: HTMLMediaElement, shape: Shape) => void;
+  /** Start this (next) song at `start` seconds (drop sync). */
+  startNextAt?: (videoId: string, start: number) => void;
   /** Loop out: repeat `length` seconds of it after `after` seconds. */
   loopOut?: (element: HTMLMediaElement, after: number, length: number) => boolean;
   /** Pause or resume an element's loop. */
@@ -424,13 +407,12 @@ export class Crossfader {
       }
       // The incoming song: the player may or may not have switched to it.
       const outgoingId = this.playing?.videoId;
+      // At this point the player still reports the outgoing song: the
+      // incoming one is the song that was next in the queue.
       const incoming = [
         this.api.getVideoData()?.video_id,
-        document.querySelector<HTMLElement & { data?: { videoId?: string } }>(
-          'ytmusic-player-queue-item[selected]',
-        )?.data?.videoId,
-        auto ? this.plannedNext : undefined,
-      ].find((id) => id && id !== outgoingId);
+        this.plannedNext,
+      ].find((id) => id && !(outgoingId && sameSong(id, outgoingId)));
       const chosen = jump?.override;
       const transition = chosen
         ? { style: chosen.style, length: chosen.length }
@@ -445,6 +427,9 @@ export class Crossfader {
       }
       const { style } = transition;
       const fade = transition.length;
+      const dropTarget = jump ? jump.videoId : incoming;
+      const dropped =
+        !!dropTarget && settings.dropSync && this.syncDrop(dropTarget, fade);
 
       const mirror = this.mirrors.current;
       const time = video.currentTime;
@@ -501,7 +486,14 @@ export class Crossfader {
         style,
         audioLeft: songEnd - time,
       });
-      this.startFadeIn(target, fade, fadeFor(settings), jump?.startAt, style);
+      this.startFadeIn(
+        target,
+        fade,
+        fadeFor(settings),
+        // From its drop instead (asked for by the song's start below).
+        dropped ? undefined : jump?.startAt,
+        style,
+      );
     } catch (err) {
       console.warn('[seamless-crossfade]', err);
     } finally {
@@ -915,6 +907,28 @@ export class Crossfader {
   }
 
   /**
+   * Drop sync: start `incoming` so its drop lands as the `fade`-second
+   * transition ends, whatever start was chosen for it. False if it has no
+   * clear drop (or its intro is about as long as the transition).
+   */
+  private syncDrop(incoming: string, fade: number) {
+    // Analysed under any of its versions' ids.
+    const id = versionsOf(incoming).find(
+      (version) => tempoCache.get(version) && loudnessCache.get(version),
+    );
+    const tempo = id && tempoCache.get(id);
+    const blocks = id && loudnessCache.get(id);
+    if (!tempo || !blocks) return false;
+    const drop = findDrop(tempo, blocks);
+    if (drop === undefined) return false;
+    const start = drop - fade;
+    if (start < MIN_DROP_SKIP) return false;
+    if (!this.startNextAt) return false;
+    this.startNextAt(incoming, start);
+    return true;
+  }
+
+  /**
    * Remember the playing song (for the next crossfade) and have the next
    * song's tempo ready by then.
    */
@@ -926,7 +940,9 @@ export class Crossfader {
       videoId,
       shift: video.currentTime - api.getCurrentTime(),
     };
-    const next = nextInQueue();
+    const next = nextInQueue(videoId);
+    // Remembered for the change to it (by Next, or at the song's end).
+    this.plannedNext = next;
     if (!next || next === this.prefetched) return;
     this.prefetched = next;
     loadTempo(next).catch(() => {});
@@ -951,8 +967,7 @@ export class Crossfader {
     const mirror = this.mirrors.current;
     if (!mirror) return;
 
-    const next = this.upcoming?.();
-    this.plannedNext = next;
+    const next = this.plannedNext;
     const fade = this.transitionInto(next, false, settings.autoDuration).length;
     const time = video.currentTime;
     const songStart = time - api.getCurrentTime();

@@ -72,6 +72,8 @@ export type SeamlessCrossfadeConfig = {
    */
   fadeInBeats: boolean;
   fadeBeats: number;
+  /** The next song starts so its drop lands as the transition ends. */
+  dropSync: boolean;
   transitionStyle: TransitionStyle;
 };
 
@@ -91,6 +93,7 @@ export const defaultConfig: SeamlessCrossfadeConfig = {
   loudnessMatching: true,
   fadeInBeats: true,
   fadeBeats: 16,
+  dropSync: false,
   transitionStyle: 'fade',
 };
 

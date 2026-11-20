@@ -95,6 +95,11 @@ export const renderSettings = (
     onChange: (beats) => save({ fadeBeats: beats }),
   });
   fadeBeats.setDisabled(!config.fadeInBeats);
+  const dropSync = createToggle({
+    label: t(key('drop-sync')),
+    checked: config.dropSync,
+    onChange: (value) => save({ dropSync: value }),
+  });
   const fadeInBeats = createToggle({
     label: t(key('fade-in-beats')),
     checked: config.fadeInBeats,
@@ -192,6 +197,7 @@ export const renderSettings = (
     jumpDuration.row,
     fadeInBeats.row,
     fadeBeats.row,
+    dropSync.row,
     askOnPlay.row,
     bestPartLength.row,
     bestPartsAll.row,

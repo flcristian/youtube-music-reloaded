@@ -12,8 +12,11 @@ import {
 } from '@/plugins/utils/renderer/innertube';
 
 import { bestPartStart, loadReplayGraph } from './best-part';
-
-import type { Interval } from './play-from';
+import {
+  type Interval,
+  placeDropdown,
+  type PlayEndpoint,
+} from './play-from';
 
 /** Songs whose replay data is fetched at the same time. */
 const PARALLEL = 6;
@@ -185,11 +188,33 @@ const partOf = async (track: Track, part: number): Promise<Interval> => {
   return { start, end: Math.min(length, start + part) };
 };
 
+/** Start playing an endpoint, the way YouTube Music's own links do. */
+const navigate = (endpoint: PlayEndpoint) => {
+  document.querySelector('ytmusic-app')?.dispatchEvent(
+    new CustomEvent('yt-navigate', {
+      bubbles: true,
+      composed: true,
+      detail: { endpoint },
+    }),
+  );
+};
+
+const menuStyles = `
+  :host { position: fixed; inset: 0; z-index: 10000; font-family: Roboto, Arial, sans-serif; }
+  .backdrop { position: absolute; inset: 0; }
+  .dialog { position: absolute; min-width: 220px; padding: 8px 0; background: #212121; border-radius: 10px; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6); outline: none; }
+  button { display: flex; align-items: center; gap: 14px; width: 100%; padding: 10px 16px; background: none; border: none; color: #fff; font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
+  button:hover, button:focus-visible { background: rgba(255, 255, 255, 0.1); outline: none; }
+  svg { fill: currentColor; flex: none; }
+`;
+
 export class BestPartsPlaylist {
   private observer?: MutationObserver;
   private items: HTMLElement[] = [];
   private playlistId?: string;
   private spinner?: HTMLElement;
+  /** The open playlist dropdown. */
+  private menu?: HTMLElement;
   /** Bumped by every run, so an older run that finishes late does nothing. */
   private run = 0;
 
@@ -234,6 +259,7 @@ export class BestPartsPlaylist {
     this.items = [];
     this.run++;
     this.spinner?.remove();
+    this.menu?.remove();
   }
 
   private addToMenu() {
@@ -257,26 +283,63 @@ export class BestPartsPlaylist {
     listbox.prepend(...this.items);
   }
 
-  private startRun(shuffle: boolean) {
-    const playlistId = this.playlistId;
+  private startRun(shuffle: boolean, playlistId = this.playlistId) {
     if (playlistId) this.start(playlistId, shuffle).catch(console.warn);
   }
 
   /** The whole playlist, shuffled (YouTube Music's own shuffled play). */
-  private shufflePlay() {
-    const playlistId = this.playlistId;
+  private shufflePlay(playlistId = this.playlistId) {
     if (!playlistId) return;
-    document.querySelector('ytmusic-app')?.dispatchEvent(
-      new CustomEvent('yt-navigate', {
-        bubbles: true,
-        composed: true,
-        detail: {
-          endpoint: {
-            watchPlaylistEndpoint: { playlistId, params: 'wAEB8gECKAE%3D' },
-          },
-        },
-      }),
-    );
+    navigate({
+      watchPlaylistEndpoint: { playlistId, params: 'wAEB8gECKAE%3D' },
+    });
+  }
+
+  /**
+   * What to do with a playlist whose play button was clicked: a dropdown
+   * under the button (play, shuffle play, best parts, shuffled best parts).
+   */
+  openMenu(playlistId: string, endpoint: PlayEndpoint, anchor: HTMLElement) {
+    this.menu?.remove();
+    const host = document.createElement('best-parts-menu');
+    this.menu = host;
+    const root = host.attachShadow({ mode: 'open' });
+    root.innerHTML = `
+      <style>${menuStyles}</style>
+      <div class="backdrop"></div>
+      <div class="dialog" role="menu"></div>`;
+    const dialog = root.querySelector<HTMLElement>('.dialog')!;
+    const close = () => {
+      unplace();
+      host.remove();
+      if (this.menu === host) this.menu = undefined;
+    };
+    const actions: [string, string, () => void][] = [
+      [PLAY_ICON, t(key('play-all')), () => navigate(endpoint)],
+      [SHUFFLE_ICON, t(key('shuffle-play')), () => this.shufflePlay(playlistId)],
+      [PLAY_ICON, t(key('play')), () => this.startRun(false, playlistId)],
+      [SHUFFLE_ICON, t(key('shuffle')), () => this.startRun(true, playlistId)],
+    ];
+    for (const [icon, label, action] of actions) {
+      const button = document.createElement('button');
+      button.setAttribute('role', 'menuitem');
+      button.innerHTML = `<svg viewBox="0 0 24 24" width="20" height="20"><path d="${icon}"></path></svg><span></span>`;
+      button.querySelector('span')!.textContent = label;
+      button.addEventListener('click', () => {
+        close();
+        action();
+      });
+      dialog.append(button);
+    }
+    root.querySelector('.backdrop')!.addEventListener('click', close);
+    host.addEventListener('keydown', (event) => {
+      event.stopPropagation();
+      if (event.key === 'Escape') close();
+    });
+    document.body.append(host);
+    const unplace = placeDropdown(dialog, anchor);
+    dialog.tabIndex = -1;
+    dialog.focus();
   }
 
   private createItem(icon: string, label: string, action: () => void) {

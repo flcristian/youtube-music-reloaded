@@ -85,11 +85,12 @@ export default createPlugin<
       // "Play from…" in song menus.
       this.playFrom = new PlayFrom(
         api,
-        (startAt, override) =>
+        (startAt, override, videoId) =>
           this.crossfader?.prepareJump(
             this.config.jumpDuration,
             startAt,
             override,
+            videoId,
           ),
         () => this.config.askOnPlay,
         () => this.config.bestPartLength,
@@ -106,6 +107,9 @@ export default createPlugin<
           this.config.bestPartsAll ? undefined : this.config.bestPartsSongs,
       });
       this.bestParts.install();
+      const bestParts = this.bestParts;
+      parts.onPlaylistPlay = (playlistId, endpoint, anchor) =>
+        bestParts.openMenu(playlistId, endpoint, anchor);
       this.crossfader.scheduledStart = (videoId) =>
         this.playFrom?.scheduledStart(videoId);
       this.crossfader.partStart = (videoId) => {
@@ -130,7 +134,8 @@ export default createPlugin<
       this.mirrors.onDispose = (audio) => leveler.release(audio);
       this.crossfader.transitionFor = (videoId, consume) =>
         parts.transitionFor(videoId, consume);
-      this.crossfader.upcoming = () => parts.upcomingVideoId();
+      this.crossfader.startNextAt = (videoId, start) =>
+        parts.startNextAt(videoId, start);
       this.mirrors.onMirror = (audio) => leveler.prepare(audio);
       const playingMirror = this.mirrors.current;
       if (playingMirror) leveler.prepare(playingMirror.audio);
