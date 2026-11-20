@@ -124,6 +124,10 @@ export default createPlugin<
       const leveler = this.leveler;
       this.crossfader.handOff = (audio) => leveler.handOff(audio);
       this.crossfader.shape = (element, shape) => leveler.shape(element, shape);
+      this.crossfader.loopOut = (element, after, length) =>
+        leveler.loop(element, after, length);
+      this.crossfader.holdLoop = (element, held) => leveler.hold(element, held);
+      this.mirrors.onDispose = (audio) => leveler.release(audio);
       this.crossfader.transitionFor = (videoId, consume) =>
         parts.transitionFor(videoId, consume);
       this.crossfader.upcoming = () => parts.upcomingVideoId();

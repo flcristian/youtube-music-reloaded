@@ -172,6 +172,8 @@ export const renderSettings = (
       { value: 'tape-stop', label: t(key('style.tape-stop')) },
       { value: 'filter', label: t(key('style.filter')) },
       { value: 'bass-swap', label: t(key('style.bass-swap')) },
+      { value: 'echo-out', label: t(key('style.echo-out')) },
+      { value: 'loop-out', label: t(key('style.loop-out')) },
     ],
     onChange: (value) => save({ transitionStyle: value }),
   });

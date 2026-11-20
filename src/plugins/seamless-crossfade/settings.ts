@@ -1,13 +1,21 @@
 export type FadeCurve = 'equal-power' | 'linear' | 'steep' | 'exponential-out';
 
 /** How the outgoing song leaves (automatic crossfades and Next). */
-export type TransitionStyle = 'fade' | 'tape-stop' | 'filter' | 'bass-swap';
+export type TransitionStyle =
+  | 'fade'
+  | 'tape-stop'
+  | 'filter'
+  | 'bass-swap'
+  | 'echo-out'
+  | 'loop-out';
 
 export const TRANSITION_STYLES: TransitionStyle[] = [
   'fade',
   'tape-stop',
   'filter',
   'bass-swap',
+  'echo-out',
+  'loop-out',
 ];
 
 /** A transition chosen for one song (in "Play from…"). */
@@ -26,6 +34,8 @@ export const STYLE_LENGTHS: Record<
   'tape-stop': { min: 0.5, max: 4, step: 0.1, value: 1.5 },
   'filter': { min: 2, max: 40, step: 1, value: 16 },
   'bass-swap': { min: 2, max: 40, step: 1, value: 16 },
+  'echo-out': { min: 1, max: 16, step: 0.5, value: 4 },
+  'loop-out': { min: 2, max: 30, step: 1, value: 8 },
 };
 
 export type SeamlessCrossfadeConfig = {

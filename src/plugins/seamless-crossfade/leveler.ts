@@ -24,6 +24,7 @@ import {
 } from '@/plugins/waveform-seekbar/loudness';
 
 import { FLAT, HIGH_HZ, LOW_HZ, MID_HZ, type Shape } from './eq';
+import { LOOP_PROCESSOR, loadLoopWorklet } from './loop-worklet';
 
 import type { MusicPlayer } from '@/types/music-player';
 
@@ -33,6 +34,10 @@ const MAX_BOOST = 10;
 const MAX_CUT = 12;
 /** Changes smaller than this (dB) are left alone. */
 const MIN_CHANGE = 0.25;
+/** Longest echo delay, in seconds. */
+const MAX_ECHO = 2;
+/** How long a done-with element's echoes may ring on, in milliseconds. */
+const RING_OUT = 10_000;
 /** Limiter: peaks above this (dBFS) are held down. */
 const LIMIT_THRESHOLD = -1;
 const LIMIT_RATIO = 20;
@@ -53,13 +58,23 @@ export class Leveler {
   private readonly shapers = new WeakMap<
     HTMLMediaElement,
     {
+      source: MediaElementAudioSourceNode;
       low: BiquadFilterNode;
       mid: BiquadFilterNode;
       high: BiquadFilterNode;
       highPass: BiquadFilterNode;
       lowPass: BiquadFilterNode;
+      loop?: AudioWorkletNode;
+      level: GainNode;
+      echo: GainNode;
+      delay: DelayNode;
+      echoFilter: BiquadFilterNode;
+      feedback: GainNode;
+      all: AudioNode[];
     }
   >();
+  /** Whether the loop worklet is loaded. */
+  private loopReady = false;
   private video?: HTMLVideoElement;
   /** Song and gain (dB) last applied to the player. */
   private applied?: { videoId: string; db: number };
@@ -144,7 +159,57 @@ export class Leveler {
     set(nodes.mid.gain, shape.mid);
     set(nodes.high.gain, shape.high);
     set(nodes.highPass.frequency, shape.highPass);
+    set(nodes.echoFilter.frequency, Math.max(shape.highPass, 120));
     set(nodes.lowPass.frequency, shape.lowPass);
+    set(nodes.level.gain, shape.level);
+    set(nodes.echo.gain, shape.echo);
+    set(nodes.feedback.gain, Math.min(0.9, shape.feedback));
+    if (Math.abs(nodes.delay.delayTime.value - shape.echoTime) > 1e-3) {
+      nodes.delay.delayTime.setValueAtTime(
+        Math.min(MAX_ECHO, shape.echoTime),
+        now,
+      );
+    }
+  }
+
+  /**
+   * Loop out: after `after` seconds, repeat the last `length` seconds of
+   * this element's sound (sample-accurately). False if it can't.
+   */
+  loop(element: HTMLMediaElement, after: number, length: number) {
+    if (!this.context) return false;
+    this.route(element);
+    const node = this.shapers.get(element)?.loop;
+    if (!node) return false;
+    node.port.postMessage({ loop: true, after, length });
+    return true;
+  }
+
+  /** Pause or resume this element's loop (with the player). */
+  hold(element: HTMLMediaElement, held: boolean) {
+    this.shapers.get(element)?.loop?.port.postMessage({ held });
+  }
+
+  /**
+   * Done with this element: silence it now, let its echoes ring out, then
+   * take its nodes out of the graph.
+   */
+  release(element: HTMLMediaElement) {
+    const nodes = this.shapers.get(element);
+    if (!nodes || !this.context || element === this.video) return;
+    nodes.loop?.port.postMessage({ stop: true });
+    nodes.level.gain.setTargetAtTime(0, this.context.currentTime, 0.02);
+    nodes.echo.gain.setTargetAtTime(0, this.context.currentTime, 0.02);
+    this.shapers.delete(element);
+    const gain = this.gains.get(element);
+    this.gains.delete(element);
+    setTimeout(() => {
+      for (const node of [...nodes.all, gain]) {
+        try {
+          node?.disconnect();
+        } catch {}
+      }
+    }, RING_OUT);
   }
 
   stop() {
@@ -233,6 +298,11 @@ export class Leveler {
     makeup.connect(context.destination);
     this.input = limiter;
     this.context = context;
+    loadLoopWorklet(context)
+      .then(() => {
+        this.loopReady = true;
+      })
+      .catch((err) => console.warn('[seamless-crossfade] loop out', err));
     const pending = this.pendingMirror;
     this.pendingMirror = undefined;
     if (pending) this.route(pending);
@@ -271,16 +341,55 @@ export class Leveler {
     nodes.highPass.Q.value = Math.SQRT1_2;
     nodes.lowPass.Q.value = Math.SQRT1_2;
     const gain = context.createGain();
-    source
+    // Loop out (only outgoing songs, i.e. not the player's own element).
+    const loop =
+      this.loopReady && element !== this.sharedSource?.mediaElement
+        ? new AudioWorkletNode(context, LOOP_PROCESSOR, {
+            outputChannelCount: [2],
+          })
+        : undefined;
+    const level = context.createGain();
+    // Echo out: a delay feeding back into itself through a high-pass.
+    const echo = context.createGain();
+    echo.gain.value = 0;
+    const delay = context.createDelay(MAX_ECHO);
+    delay.delayTime.value = FLAT.echoTime;
+    const echoFilter = filter('highpass', 120);
+    const feedback = context.createGain();
+    feedback.gain.value = 0;
+    let shaped: AudioNode = source
       .connect(nodes.low)
       .connect(nodes.mid)
       .connect(nodes.high)
       .connect(nodes.highPass)
-      .connect(nodes.lowPass)
-      .connect(gain);
+      .connect(nodes.lowPass);
+    if (loop) shaped = shaped.connect(loop);
+    shaped.connect(level).connect(gain);
+    shaped.connect(echo).connect(delay).connect(echoFilter);
+    echoFilter.connect(feedback).connect(delay);
+    echoFilter.connect(gain);
     gain.connect(input);
     this.gains.set(element, gain);
-    this.shapers.set(element, nodes);
+    this.shapers.set(element, {
+      ...nodes,
+      source,
+      loop,
+      level,
+      echo,
+      delay,
+      echoFilter,
+      feedback,
+      all: [
+        source,
+        ...Object.values(nodes),
+        ...(loop ? [loop] : []),
+        level,
+        echo,
+        delay,
+        echoFilter,
+        feedback,
+      ],
+    });
     return gain;
   }
 }

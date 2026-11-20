@@ -168,7 +168,17 @@ export class StreamMirror {
     return false;
   }
 
+  /** Called once, when it's disposed. */
+  onDispose?: () => void;
+
   dispose() {
+    const onDispose = this.onDispose;
+    this.onDispose = undefined;
+    try {
+      onDispose?.();
+    } catch (err) {
+      console.warn('[seamless-crossfade]', err);
+    }
     this.broken = true;
     this.queue.length = 0;
     this.audio.pause();
@@ -267,6 +277,8 @@ export class MirrorManager {
 
   /** Called with each new mirror's <audio>, before it ever plays. */
   onMirror?: (audio: HTMLAudioElement) => void;
+  /** A mirror's element is done with (its audio nodes can go). */
+  onDispose?: (audio: HTMLAudioElement) => void;
 
   constructor(private readonly getPlaybackTime: () => number) {}
 
@@ -387,6 +399,8 @@ export class MirrorManager {
         this.getPlaybackTime,
         (mirrorSb) => this.ours.add(mirrorSb),
       );
+      const created = mirror;
+      created.onDispose = () => this.onDispose?.(created.audio);
       try {
         this.onMirror?.(mirror.audio);
       } catch (err) {

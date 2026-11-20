@@ -849,7 +849,9 @@
           "fade": "Crossfade",
           "tape-stop": "Oprire de bandă",
           "filter": "Filtru",
-          "bass-swap": "Schimb de bas"
+          "bass-swap": "Schimb de bas",
+          "echo-out": "Ecou final",
+          "loop-out": "Buclă finală"
         }
       }
     },

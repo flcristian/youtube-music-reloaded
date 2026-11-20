@@ -80,6 +80,14 @@ const BRAKE_BEATS = 2;
 const BRAKE_MIN = 0.6;
 const BRAKE_MAX = 2;
 const BRAKE_DEFAULT = 1.2;
+/** Echo out: the echoes ring out over this many beats… */
+const ECHO_BEATS = 8;
+/** …within these limits (seconds), or this long without a known tempo. */
+const ECHO_MIN = 2;
+const ECHO_MAX = 8;
+const ECHO_DEFAULT = 4;
+/** Loop out: the longest loop, in beats (a bar). */
+const LOOP_BEATS = 4;
 /** Slowest speed a media element plays at; below it the brake ends. */
 const BRAKE_LOWEST_RATE = 0.0625;
 
@@ -306,6 +314,10 @@ export class Crossfader {
   upcoming?: () => string | undefined;
   /** Shapes an element's sound (EQ and filters). */
   shape?: (element: HTMLMediaElement, shape: Shape) => void;
+  /** Loop out: repeat `length` seconds of it after `after` seconds. */
+  loopOut?: (element: HTMLMediaElement, after: number, length: number) => boolean;
+  /** Pause or resume an element's loop. */
+  holdLoop?: (element: HTMLMediaElement, held: boolean) => void;
 
   /** The transition into `incoming`: its style and length (seconds). */
   private transitionInto(
@@ -448,7 +460,9 @@ export class Crossfader {
         Math.min(mirror.songEndAt(time), duration),
         time,
       );
-      const tailLength = Math.min(fade, songEnd - time);
+      // Echoes and loops carry on past the end of the song's audio.
+      const pastEnd = style === 'echo-out' || style === 'loop-out';
+      const tailLength = pastEnd ? fade : Math.min(fade, songEnd - time);
       if (!(tailLength > 0.3)) {
         this.finishFadeIn();
         return;
@@ -485,6 +499,7 @@ export class Crossfader {
         curve: fadeFor(settings),
         playbackRate: video.playbackRate,
         style,
+        audioLeft: songEnd - time,
       });
       this.startFadeIn(target, fade, fadeFor(settings), jump?.startAt, style);
     } catch (err) {
@@ -506,17 +521,50 @@ export class Crossfader {
       curve: Fade;
       playbackRate: number;
       style: TransitionStyle;
+      /** Seconds of its audio left. */
+      audioLeft: number;
     },
   ) {
     const { audio } = mirror;
     // Tape stop: slow down to a halt instead of fading out.
     const brake = options.style === 'tape-stop';
+    // Echo and loop out: the element plays on at its level; the fading is
+    // done after the echo/loop (else they'd fade too).
+    const late = options.style === 'echo-out' || options.style === 'loop-out';
+    const outgoing = this.playing;
+    const tempo = outgoing && tempoCache.get(outgoing.videoId);
+    const songTime = options.time - (outgoing?.shift ?? 0);
+    const beat =
+      (tempo
+        ? (beatGrid(tempo, songTime - 10, songTime)?.period ?? 60 / tempo.bpm)
+        : 0.5) / options.playbackRate;
+    let looping = false;
+    if (options.style === 'loop-out' && tempo) {
+      // A bar, or shorter if the transition or the song's audio is short;
+      // it starts once that much has played (it repeats what just played).
+      let beats = LOOP_BEATS;
+      while (
+        beats > 1 &&
+        (beats * beat * 2 > options.length || beats * beat > options.audioLeft)
+      ) {
+        beats /= 2;
+      }
+      const length = beats * beat;
+      looping = length <= options.audioLeft && !!this.loopOut?.(audio, length, length);
+    }
     const { video } = this;
     let cancel: (() => void) | undefined;
     const tail: Tail = {
-      pause: () => audio.pause(),
+      pause: () => {
+        audio.pause();
+        if (looping) this.holdLoop?.(audio, true);
+      },
       resume: () => {
-        audio.play().catch(() => tail.stop());
+        if (looping) this.holdLoop?.(audio, false);
+        if (late && audio.ended) return;
+        audio.play().catch(() => {
+          if (!late) tail.stop();
+        });
       },
       stop: () => {
         cancel?.();
@@ -544,9 +592,11 @@ export class Crossfader {
           ? this.userVolume() / options.userVolumeAtStart
           : 0;
       // Tape stop: stays up while it slows down, gone as it stops.
-      const level = brake
-        ? 1 - (progress ** 4)
-        : options.curve.out(progress);
+      const level = late
+        ? 1
+        : brake
+          ? 1 - (progress ** 4)
+          : options.curve.out(progress);
       const value = options.startVolume * scale * level;
       return Math.min(1, Math.max(0, value));
     };
@@ -557,8 +607,9 @@ export class Crossfader {
     audio.volume = volumeAt(0);
     audio.muted = video.muted;
     cancel = loop((now) => {
-      // The fade only advances while the outgoing song actually plays.
-      if (!audio.paused) elapsed += now - last;
+      // The fade only advances while the outgoing song actually plays
+      // (echoes and loops: while not paused, even past the song's end).
+      if (late ? !this.userPaused : !audio.paused) elapsed += now - last;
       this.steer(audio);
       last = now;
       const own = Math.min(1, elapsed / 1000 / options.length);
@@ -572,14 +623,27 @@ export class Crossfader {
       }
       audio.muted = video.muted;
       audio.volume = volumeAt(progress);
-      this.shape?.(audio, outgoingShape(options.style, progress));
-      if (progress < 1 && !audio.ended) return true;
+      this.shape?.(
+        audio,
+        outgoingShape(
+          options.style,
+          progress,
+          beat,
+          options.curve.out(progress),
+        ),
+      );
+      if (progress < 1 && (late || !audio.ended)) return true;
       tail.stop();
       return false;
     });
 
-    if (this.userPaused) return;
-    audio.play().catch(() => tail.stop());
+    if (this.userPaused) {
+      if (looping) this.holdLoop?.(audio, true);
+      return;
+    }
+    audio.play().catch(() => {
+      if (!late) tail.stop();
+    });
   }
 
   /** Keep the incoming song silent until it plays, then fade it in. */
@@ -829,6 +893,12 @@ export class Crossfader {
   private fadeLength(seconds: number, style: TransitionStyle) {
     const settings = this.getSettings();
     const videoId = this.playing?.videoId;
+    if (style === 'echo-out') {
+      const tempo = videoId ? tempoCache.get(videoId) : undefined;
+      return tempo
+        ? Math.min(ECHO_MAX, Math.max(ECHO_MIN, (ECHO_BEATS * 60) / tempo.bpm))
+        : ECHO_DEFAULT;
+    }
     if (style === 'tape-stop') {
       const tempo = videoId ? tempoCache.get(videoId) : undefined;
       return tempo

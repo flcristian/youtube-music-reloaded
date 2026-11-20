@@ -1082,7 +1082,9 @@ const styles = `
   .buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
   .transition { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 10px; font-size: 13px; color: rgba(255, 255, 255, 0.7); }
   .transition label { display: flex; align-items: center; gap: 8px; }
-  .transition label[hidden] { display: none; }
+  /* Hidden but keeping its space: the dropdown keeps its size. */
+  .transition label[hidden] { display: flex; visibility: hidden; }
+  .transition select { min-width: 130px; }
   .transition select { background: #2a2a2a; color: #fff; border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 6px; padding: 4px 6px; font: inherit; }
   .transition input[type=range] { width: 120px; accent-color: #f03; }
   .length-value { min-width: 40px; font-variant-numeric: tabular-nums; }

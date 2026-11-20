@@ -864,7 +864,9 @@
           "fade": "Crossfade",
           "tape-stop": "Tape stop",
           "filter": "Filter",
-          "bass-swap": "Bass swap"
+          "bass-swap": "Bass swap",
+          "echo-out": "Echo out",
+          "loop-out": "Loop out"
         }
       }
     },
