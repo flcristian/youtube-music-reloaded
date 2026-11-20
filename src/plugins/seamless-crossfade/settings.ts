@@ -1,5 +1,33 @@
 export type FadeCurve = 'equal-power' | 'linear' | 'steep' | 'exponential-out';
 
+/** How the outgoing song leaves (automatic crossfades and Next). */
+export type TransitionStyle = 'fade' | 'tape-stop' | 'filter' | 'bass-swap';
+
+export const TRANSITION_STYLES: TransitionStyle[] = [
+  'fade',
+  'tape-stop',
+  'filter',
+  'bass-swap',
+];
+
+/** A transition chosen for one song (in "Play from…"). */
+export interface TransitionOverride {
+  style: TransitionStyle;
+  /** Seconds. */
+  length: number;
+}
+
+/** Length range and default (seconds) of each style, for one transition. */
+export const STYLE_LENGTHS: Record<
+  TransitionStyle,
+  { min: number; max: number; step: number; value: number }
+> = {
+  'fade': { min: 1, max: 30, step: 0.5, value: 8 },
+  'tape-stop': { min: 0.5, max: 4, step: 0.1, value: 1.5 },
+  'filter': { min: 2, max: 40, step: 1, value: 16 },
+  'bass-swap': { min: 2, max: 40, step: 1, value: 16 },
+};
+
 export type SeamlessCrossfadeConfig = {
   enabled: boolean;
   /** Crossfade when a song reaches its end. */
@@ -34,6 +62,7 @@ export type SeamlessCrossfadeConfig = {
    */
   fadeInBeats: boolean;
   fadeBeats: number;
+  transitionStyle: TransitionStyle;
 };
 
 export const defaultConfig: SeamlessCrossfadeConfig = {
@@ -52,6 +81,7 @@ export const defaultConfig: SeamlessCrossfadeConfig = {
   loudnessMatching: true,
   fadeInBeats: true,
   fadeBeats: 16,
+  transitionStyle: 'fade',
 };
 
 export const MIN_PART_LENGTH = 30;

@@ -835,7 +835,9 @@
         "confirm": "Play {{range}}",
         "menu": "Play from…",
         "play-next": "Play next",
-        "play-now": "Play now"
+        "play-now": "Play now",
+        "transition": "Transition",
+        "transition-default": "As in settings"
       },
       "settings": {
         "ask-on-play": "Choose a part before playing (clicking play opens \"Play from…\")",
@@ -856,7 +858,14 @@
         "outro-steepness": "Outro steepness",
         "loudness-matching": "Match loudness between songs",
         "fade-in-beats": "Crossfade length in beats (seconds when a song has no clear beat)",
-        "fade-beats": "Beats"
+        "fade-beats": "Beats",
+        "style": {
+          "label": "Transition style",
+          "fade": "Crossfade",
+          "tape-stop": "Tape stop",
+          "filter": "Filter",
+          "bass-swap": "Bass swap"
+        }
       }
     },
     "shortcuts": {

@@ -85,8 +85,12 @@ export default createPlugin<
       // "Play from…" in song menus.
       this.playFrom = new PlayFrom(
         api,
-        (startAt) =>
-          this.crossfader?.prepareJump(this.config.jumpDuration, startAt),
+        (startAt, override) =>
+          this.crossfader?.prepareJump(
+            this.config.jumpDuration,
+            startAt,
+            override,
+          ),
         () => this.config.askOnPlay,
         () => this.config.bestPartLength,
       );
@@ -119,6 +123,10 @@ export default createPlugin<
       );
       const leveler = this.leveler;
       this.crossfader.handOff = (audio) => leveler.handOff(audio);
+      this.crossfader.shape = (element, shape) => leveler.shape(element, shape);
+      this.crossfader.transitionFor = (videoId, consume) =>
+        parts.transitionFor(videoId, consume);
+      this.crossfader.upcoming = () => parts.upcomingVideoId();
       this.mirrors.onMirror = (audio) => leveler.prepare(audio);
       const playingMirror = this.mirrors.current;
       if (playingMirror) leveler.prepare(playingMirror.audio);

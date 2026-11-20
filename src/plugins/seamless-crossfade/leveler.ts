@@ -23,6 +23,8 @@ import {
   rangeLoudness,
 } from '@/plugins/waveform-seekbar/loudness';
 
+import { FLAT, HIGH_HZ, LOW_HZ, MID_HZ, type Shape } from './eq';
+
 import type { MusicPlayer } from '@/types/music-player';
 
 /** Most a quiet song is boosted, in dB. */
@@ -47,6 +49,17 @@ export class Leveler {
   private context?: AudioContext;
   private input?: AudioNode;
   private readonly gains = new WeakMap<HTMLMediaElement, GainNode>();
+  /** Each element's EQ and filters (transition styles). */
+  private readonly shapers = new WeakMap<
+    HTMLMediaElement,
+    {
+      low: BiquadFilterNode;
+      mid: BiquadFilterNode;
+      high: BiquadFilterNode;
+      highPass: BiquadFilterNode;
+      lowPass: BiquadFilterNode;
+    }
+  >();
   private video?: HTMLVideoElement;
   /** Song and gain (dB) last applied to the player. */
   private applied?: { videoId: string; db: number };
@@ -114,6 +127,26 @@ export class Leveler {
     this.applied = undefined;
   }
 
+  /** Shape this element's sound (EQ and filters) for a transition. */
+  shape(element: HTMLMediaElement, shape: Shape) {
+    if (!this.context) return;
+    this.route(element);
+    const nodes = this.shapers.get(element);
+    if (!nodes) return;
+    const now = this.context.currentTime;
+    // Quick, but without clicks.
+    const set = (param: AudioParam, value: number) => {
+      if (Math.abs(param.value - value) > 1e-3) {
+        param.setTargetAtTime(value, now, 0.02);
+      }
+    };
+    set(nodes.low.gain, shape.low);
+    set(nodes.mid.gain, shape.mid);
+    set(nodes.high.gain, shape.high);
+    set(nodes.highPass.frequency, shape.highPass);
+    set(nodes.lowPass.frequency, shape.lowPass);
+  }
+
   stop() {
     document.removeEventListener('peard:audio-can-play', this.onAudioReady);
     this.video?.removeEventListener('timeupdate', this.update);
@@ -122,6 +155,7 @@ export class Leveler {
     const now = this.context?.currentTime ?? 0;
     for (const element of document.querySelectorAll('video')) {
       this.gains.get(element)?.gain.setValueAtTime(1, now);
+      this.shape(element, FLAT);
     }
   }
 
@@ -220,10 +254,33 @@ export class Leveler {
     } else {
       source = context.createMediaElementSource(element);
     }
+    const filter = (type: BiquadFilterType, frequency: number) => {
+      const node = context.createBiquadFilter();
+      node.type = type;
+      node.frequency.value = frequency;
+      return node;
+    };
+    const nodes = {
+      low: filter('lowshelf', LOW_HZ),
+      mid: filter('peaking', MID_HZ),
+      high: filter('highshelf', HIGH_HZ),
+      highPass: filter('highpass', FLAT.highPass),
+      lowPass: filter('lowpass', FLAT.lowPass),
+    };
+    nodes.mid.Q.value = 0.7;
+    nodes.highPass.Q.value = Math.SQRT1_2;
+    nodes.lowPass.Q.value = Math.SQRT1_2;
     const gain = context.createGain();
-    source.connect(gain);
+    source
+      .connect(nodes.low)
+      .connect(nodes.mid)
+      .connect(nodes.high)
+      .connect(nodes.highPass)
+      .connect(nodes.lowPass)
+      .connect(gain);
     gain.connect(input);
     this.gains.set(element, gain);
+    this.shapers.set(element, nodes);
     return gain;
   }
 }

@@ -8,6 +8,7 @@ import {
 import {
   clampDuration,
   type FadeCurve,
+  type TransitionStyle,
   MAX_BEATS,
   MAX_DURATION,
   MAX_PART_LENGTH,
@@ -163,6 +164,18 @@ export const renderSettings = (
     },
   });
 
+  const style = createChoice<TransitionStyle>({
+    label: t(key('style.label')),
+    value: config.transitionStyle,
+    choices: [
+      { value: 'fade', label: t(key('style.fade')) },
+      { value: 'tape-stop', label: t(key('style.tape-stop')) },
+      { value: 'filter', label: t(key('style.filter')) },
+      { value: 'bass-swap', label: t(key('style.bass-swap')) },
+    ],
+    onChange: (value) => save({ transitionStyle: value }),
+  });
+
   const loudnessMatching = createToggle({
     label: t(key('loudness-matching')),
     checked: config.loudnessMatching,
@@ -181,6 +194,7 @@ export const renderSettings = (
     bestPartLength.row,
     bestPartsAll.row,
     bestPartsSongs.row,
+    style.row,
     curve.row,
     steepness.row,
     loudnessMatching.row,

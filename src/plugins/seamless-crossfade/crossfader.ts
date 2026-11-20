@@ -10,11 +10,14 @@ import {
   type Tempo,
 } from '@/plugins/waveform-seekbar/tempo';
 
+import { FLAT, incomingShape, outgoingShape, type Shape } from './eq';
 import {
   clampDuration,
   fadeFor,
   type Fade,
   type SeamlessCrossfadeConfig,
+  type TransitionOverride,
+  type TransitionStyle,
 } from './settings';
 
 import type { MirrorManager, StreamMirror } from './mirror';
@@ -71,6 +74,14 @@ const ALIGN_EARLY_BEATS = 16;
 const ALIGN_LATE_BEATS = 2;
 /** Most seconds an automatic crossfade can be moved earlier. */
 const ALIGN_EARLY_MAX = 12;
+/** Tape stop: the outgoing song brakes to a halt over this many beats… */
+const BRAKE_BEATS = 2;
+/** …within these limits (seconds), or this long without a known tempo. */
+const BRAKE_MIN = 0.6;
+const BRAKE_MAX = 2;
+const BRAKE_DEFAULT = 1.2;
+/** Slowest speed a media element plays at; below it the brake ends. */
+const BRAKE_LOWEST_RATE = 0.0625;
 
 /** Positive remainder. */
 const mod = (value: number, by: number) => ((value % by) + by) % by;
@@ -213,7 +224,16 @@ export class Crossfader {
   private skipPlan?: { key: string; at: number };
   private autoSkipAt = -Infinity;
   /** A "Play from…" in progress: crossfade with its own duration. */
-  private jump?: { at: number; duration: number; startAt: number };
+  private jump?: {
+    at: number;
+    duration: number;
+    startAt: number;
+    override?: TransitionOverride;
+  };
+  /** The song expected to come next (planned automatic transition). */
+  private plannedNext?: string;
+  /** The running transition's style (shapes the incoming song). */
+  private style: TransitionStyle = 'fade';
   private reloadChecked = false;
   /** The song playing, and its media time minus song time. */
   private playing?: { videoId: string; shift: number };
@@ -268,8 +288,38 @@ export class Crossfader {
    * `duration` seconds (regardless of the manual crossfade setting),
    * keeping it silent until it has reached `startAt` seconds.
    */
-  prepareJump(duration: number, startAt: number) {
-    this.jump = { at: performance.now(), duration, startAt };
+  prepareJump(
+    duration: number,
+    startAt: number,
+    /** A transition chosen for this one song. */
+    override?: TransitionOverride,
+  ) {
+    this.jump = { at: performance.now(), duration, startAt, override };
+  }
+
+  /** A transition chosen for this song (`consume`: it's happening now). */
+  transitionFor?: (
+    videoId: string,
+    consume: boolean,
+  ) => TransitionOverride | undefined;
+  /** The song after the playing one in the queue. */
+  upcoming?: () => string | undefined;
+  /** Shapes an element's sound (EQ and filters). */
+  shape?: (element: HTMLMediaElement, shape: Shape) => void;
+
+  /** The transition into `incoming`: its style and length (seconds). */
+  private transitionInto(
+    incoming: string | undefined,
+    consume: boolean,
+    /** Its length without a chosen one (crossfade style). */
+    seconds: number,
+  ) {
+    const settings = this.getSettings();
+    const chosen = incoming
+      ? this.transitionFor?.(incoming, consume)
+      : undefined;
+    const style = chosen?.style ?? settings.transitionStyle;
+    return { style, length: chosen?.length ?? this.fadeLength(seconds, style) };
   }
 
   /** Where a queued song will start (it's held silent until then). */
@@ -360,11 +410,29 @@ export class Crossfader {
         this.finishFadeIn();
         return;
       }
-      const fade = jump
-        ? jump.duration
-        : this.fadeLength(
+      // The incoming song: the player may or may not have switched to it.
+      const outgoingId = this.playing?.videoId;
+      const incoming = [
+        this.api.getVideoData()?.video_id,
+        document.querySelector<HTMLElement & { data?: { videoId?: string } }>(
+          'ytmusic-player-queue-item[selected]',
+        )?.data?.videoId,
+        auto ? this.plannedNext : undefined,
+      ].find((id) => id && id !== outgoingId);
+      const chosen = jump?.override;
+      const transition = chosen
+        ? { style: chosen.style, length: chosen.length }
+        : this.transitionInto(
+            incoming,
+            true,
             auto ? settings.autoDuration : settings.manualDuration,
           );
+      // "Play from…" without a chosen transition: its own crossfade length.
+      if (jump && !chosen && transition.style === 'fade') {
+        transition.length = jump.duration;
+      }
+      const { style } = transition;
+      const fade = transition.length;
 
       const mirror = this.mirrors.current;
       const time = video.currentTime;
@@ -394,10 +462,11 @@ export class Crossfader {
       // It keeps its loudness level on its own element.
       this.handOff?.(mirror.audio);
       tailStarted = true;
+      const brake = style === 'tape-stop';
       const outgoing = this.playing;
       const tempo = outgoing && tempoCache.get(outgoing.videoId);
       this.beatSync =
-        outgoing && tempo
+        outgoing && tempo && !brake
           ? {
               audio: mirror.audio,
               tempo,
@@ -415,8 +484,9 @@ export class Crossfader {
         length: tailLength,
         curve: fadeFor(settings),
         playbackRate: video.playbackRate,
+        style,
       });
-      this.startFadeIn(target, fade, fadeFor(settings), jump?.startAt);
+      this.startFadeIn(target, fade, fadeFor(settings), jump?.startAt, style);
     } catch (err) {
       console.warn('[seamless-crossfade]', err);
     } finally {
@@ -435,9 +505,12 @@ export class Crossfader {
       length: number;
       curve: Fade;
       playbackRate: number;
+      style: TransitionStyle;
     },
   ) {
     const { audio } = mirror;
+    // Tape stop: slow down to a halt instead of fading out.
+    const brake = options.style === 'tape-stop';
     const { video } = this;
     let cancel: (() => void) | undefined;
     const tail: Tail = {
@@ -455,8 +528,9 @@ export class Crossfader {
     this.tails.add(tail);
 
     audio.playbackRate = options.playbackRate;
-    // Bending its tempo to the next song's keeps its pitch.
-    audio.preservesPitch = true;
+    // Bending its tempo to the next song's keeps its pitch; a tape stop
+    // drops it, like a turntable or tape slowing down.
+    audio.preservesPitch = !brake;
     // Already playing in step (prerolled): don't restart it.
     if (audio.paused) audio.currentTime = options.time;
     if (video.sinkId) {
@@ -469,8 +543,11 @@ export class Crossfader {
         options.userVolumeAtStart > 0
           ? this.userVolume() / options.userVolumeAtStart
           : 0;
-      const value =
-        options.startVolume * scale * options.curve.out(progress);
+      // Tape stop: stays up while it slows down, gone as it stops.
+      const level = brake
+        ? 1 - (progress ** 4)
+        : options.curve.out(progress);
+      const value = options.startVolume * scale * level;
       return Math.min(1, Math.max(0, value));
     };
 
@@ -485,9 +562,17 @@ export class Crossfader {
       this.steer(audio);
       last = now;
       const own = Math.min(1, elapsed / 1000 / options.length);
-      progress = Math.max(progress, this.outgoingProgress(options.curve, own));
+      progress = brake
+        ? own
+        : Math.max(progress, this.outgoingProgress(options.curve, own));
+      if (brake) {
+        const rate = options.playbackRate * ((1 - progress) ** 1.5);
+        if (rate < BRAKE_LOWEST_RATE) progress = 1;
+        else audio.playbackRate = rate;
+      }
       audio.muted = video.muted;
       audio.volume = volumeAt(progress);
+      this.shape?.(audio, outgoingShape(options.style, progress));
       if (progress < 1 && !audio.ended) return true;
       tail.stop();
       return false;
@@ -504,8 +589,11 @@ export class Crossfader {
     curve: Fade,
     /** Stay silent until the new song is at this position (Play from…). */
     startAt?: number,
+    style: TransitionStyle = 'fade',
   ) {
     const { video } = this;
+    this.style = style;
+    this.shape?.(video, incomingShape(style, 0));
     this.target = target;
     this.fadeIn = { waited: 0, duration, curve };
     this.incomingProgress = undefined;
@@ -561,6 +649,7 @@ export class Crossfader {
       const progress = Math.min(1, fadeIn.elapsed / 1000 / fadeIn.duration);
       this.incomingProgress = progress;
       setVolume(video, this.userVolume() * fadeIn.curve.in(progress));
+      this.shape?.(video, incomingShape(this.style, progress));
       if (progress < 1) return true;
       this.finishFadeIn();
       return false;
@@ -589,6 +678,8 @@ export class Crossfader {
   private finishFadeIn() {
     this.cancelFadeIn?.();
     this.cancelFadeIn = undefined;
+    if (this.fadeIn || this.style !== 'fade') this.shape?.(this.video, FLAT);
+    this.style = 'fade';
     this.fadeIn = undefined;
     // Cut short: outgoing songs go back to their own clock.
     if ((this.incomingProgress ?? 0) < 1) this.incomingProgress = undefined;
@@ -735,10 +826,19 @@ export class Crossfader {
    * How long a crossfade out of the playing song lasts: a number of its
    * beats when its tempo is known (and that's the setting), else `seconds`.
    */
-  private fadeLength(seconds: number) {
+  private fadeLength(seconds: number, style: TransitionStyle) {
     const settings = this.getSettings();
-    if (!settings.fadeInBeats) return seconds;
     const videoId = this.playing?.videoId;
+    if (style === 'tape-stop') {
+      const tempo = videoId ? tempoCache.get(videoId) : undefined;
+      return tempo
+        ? Math.min(
+            BRAKE_MAX,
+            Math.max(BRAKE_MIN, (BRAKE_BEATS * 60) / tempo.bpm),
+          )
+        : BRAKE_DEFAULT;
+    }
+    if (!settings.fadeInBeats) return seconds;
     const tempo = videoId ? tempoCache.get(videoId) : undefined;
     if (!tempo) return seconds;
     return clampDuration((settings.fadeBeats * 60) / tempo.bpm);
@@ -781,7 +881,9 @@ export class Crossfader {
     const mirror = this.mirrors.current;
     if (!mirror) return;
 
-    const fade = this.fadeLength(settings.autoDuration);
+    const next = this.upcoming?.();
+    this.plannedNext = next;
+    const fade = this.transitionInto(next, false, settings.autoDuration).length;
     const time = video.currentTime;
     const songStart = time - api.getCurrentTime();
     const end = this.songEnd(

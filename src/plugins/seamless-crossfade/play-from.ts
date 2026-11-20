@@ -9,6 +9,12 @@ import { tempoCache } from '@/plugins/waveform-seekbar/tempo';
 
 import { bestPartStart, loadReplayGraph } from './best-part';
 import { snapPart } from './part-snap';
+import {
+  STYLE_LENGTHS,
+  TRANSITION_STYLES,
+  type TransitionOverride,
+  type TransitionStyle,
+} from './settings';
 
 import type { MusicPlayer } from '@/types/music-player';
 
@@ -300,12 +306,17 @@ export class PlayFrom {
   private video?: HTMLVideoElement;
   private modal?: HTMLElement;
   private cancelEnsure?: () => void;
+  /** Transitions chosen for queued songs (the transition into them). */
+  private readonly transitions = new Map<string, TransitionOverride>();
   /** Stops keeping the open dropdown placed. */
   private unplace?: () => void;
 
   constructor(
     private readonly api: MusicPlayer,
-    private readonly prepareCrossfade: (startAt: number) => void,
+    private readonly prepareCrossfade: (
+      startAt: number,
+      override?: TransitionOverride,
+    ) => void,
     /** "Choose a part before playing": clicks on play open the modal. */
     private readonly askOnPlay: () => boolean = () => false,
     /** Length of "Best part" when nothing narrower is selected, in seconds. */
@@ -344,6 +355,24 @@ export class PlayFrom {
       return this.playNow.interval.start;
     }
     return this.findScheduled(videoId)?.interval.start;
+  }
+
+  /** The transition chosen for the change into this song, if any. */
+  transitionFor(videoId: string, consume: boolean) {
+    const chosen = this.transitions.get(videoId);
+    if (consume) this.transitions.delete(videoId);
+    return chosen;
+  }
+
+  /** The song after the playing one in the queue. */
+  upcomingVideoId() {
+    const items = [
+      ...document.querySelectorAll<
+        HTMLElement & { data?: { videoId?: string } }
+      >('ytmusic-player-queue-item'),
+    ];
+    const index = items.findIndex((item) => item.hasAttribute('selected'));
+    return index < 0 ? undefined : items[index + 1]?.data?.videoId;
   }
 
   /**
@@ -609,6 +638,13 @@ export class PlayFrom {
         ${anchor ? '' : '<div class="cover"><img alt="" /></div>'}
         <canvas class="waveform"></canvas>
         <div class="time"></div>
+        <div class="transition">
+          <label class="style-label"><span></span><select class="style"></select></label>
+          <label class="length-label" hidden>
+            <input class="length" type="range" />
+            <span class="length-value"></span>
+          </label>
+        </div>
         <div class="buttons">
           <button class="secondary best-part" disabled></button>
           ${anchor ? '' : '<button class="cancel"></button>'}
@@ -635,6 +671,42 @@ export class PlayFrom {
     bestPartButton.title = t(key('best-part-loading'));
     queueButtons[0][0].textContent = t(key('play-next'));
     queueButtons[1][0].textContent = t(key('add-to-queue'));
+
+    // The transition into this song (default: the settings').
+    const styleSelect = $<HTMLSelectElement>('.style');
+    const lengthLabel = $<HTMLLabelElement>('.length-label');
+    const lengthInput = $<HTMLInputElement>('.length');
+    const lengthValue = $<HTMLElement>('.length-value');
+    $<HTMLElement>('.style-label span').textContent = t(key('transition'));
+    styleSelect.append(
+      new Option(t(key('transition-default')), ''),
+      ...TRANSITION_STYLES.map(
+        (style) =>
+          new Option(
+            t(`plugins.seamless-crossfade.settings.style.${style}`),
+            style,
+          ),
+      ),
+    );
+    const showLength = () => {
+      lengthValue.textContent = `${Number(lengthInput.value)} s`;
+    };
+    styleSelect.addEventListener('change', () => {
+      const style = styleSelect.value as TransitionStyle | '';
+      lengthLabel.hidden = !style;
+      if (!style) return;
+      const range = STYLE_LENGTHS[style];
+      lengthInput.min = String(range.min);
+      lengthInput.max = String(range.max);
+      lengthInput.step = String(range.step);
+      lengthInput.value = String(range.value);
+      showLength();
+    });
+    lengthInput.addEventListener('input', showLength);
+    const transition = (): TransitionOverride | undefined => {
+      const style = styleSelect.value as TransitionStyle | '';
+      return style ? { style, length: Number(lengthInput.value) } : undefined;
+    };
 
     let length = 0;
     let start = 0;
@@ -730,7 +802,7 @@ export class PlayFrom {
     const play = () => {
       if (!length) return;
       close();
-      this.play(videoId, interval(), watchEndpoint);
+      this.play(videoId, interval(), watchEndpoint, transition());
     };
     $('.backdrop').addEventListener('click', close);
     cancel?.addEventListener('click', close);
@@ -740,7 +812,7 @@ export class PlayFrom {
         const data = queueData[position];
         if (!length || !data) return;
         close();
-        this.enqueue(videoId, interval(), data);
+        this.enqueue(videoId, interval(), data, transition());
       });
     }
     // Keep YouTube Music shortcuts from firing while the modal is open.
@@ -808,7 +880,14 @@ export class PlayFrom {
     });
   }
 
-  private enqueue(videoId: string, interval: Interval, data: unknown) {
+  private enqueue(
+    videoId: string,
+    interval: Interval,
+    data: unknown,
+    override?: TransitionOverride,
+  ) {
+    if (override) this.transitions.set(videoId, override);
+    else this.transitions.delete(videoId);
     const item = document.createElement(
       'ytmusic-menu-service-item-renderer',
     ) as HTMLElement & { data?: unknown; onTap?: () => void };
@@ -853,7 +932,12 @@ export class PlayFrom {
   }
 
   /** Play `interval` of `videoId` now, crossfading from the current song. */
-  play(videoId: string, interval: Interval, endpoint?: WatchEndpoint) {
+  play(
+    videoId: string,
+    interval: Interval,
+    endpoint?: WatchEndpoint,
+    override?: TransitionOverride,
+  ) {
     const { api } = this;
     const seconds = interval.start;
     // Same song: just jump there.
@@ -880,7 +964,7 @@ export class PlayFrom {
       startTimeSeconds: Math.floor(seconds),
     };
 
-    this.prepareCrossfade(seconds);
+    this.prepareCrossfade(seconds, override);
     document.querySelector('ytmusic-app')?.dispatchEvent(
       new CustomEvent('yt-navigate', {
         bubbles: true,
@@ -996,6 +1080,12 @@ const styles = `
   .waveform { display: block; width: 100%; height: 72px; margin-top: 16px; cursor: pointer; touch-action: none; }
   .time { margin-top: 6px; font-size: 13px; color: rgba(255, 255, 255, 0.7); font-variant-numeric: tabular-nums; }
   .buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  .transition { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 10px; font-size: 13px; color: rgba(255, 255, 255, 0.7); }
+  .transition label { display: flex; align-items: center; gap: 8px; }
+  .transition label[hidden] { display: none; }
+  .transition select { background: #2a2a2a; color: #fff; border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 6px; padding: 4px 6px; font: inherit; }
+  .transition input[type=range] { width: 120px; accent-color: #f03; }
+  .length-value { min-width: 40px; font-variant-numeric: tabular-nums; }
   button {
     border: none; border-radius: 18px; padding: 9px 18px; font: inherit; font-size: 14px;
     font-weight: 500; cursor: pointer;

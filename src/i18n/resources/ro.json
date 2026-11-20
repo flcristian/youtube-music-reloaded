@@ -820,7 +820,9 @@
         "confirm": "Redă {{range}}",
         "menu": "Redă de la…",
         "play-next": "Redă următoarea",
-        "play-now": "Redă acum"
+        "play-now": "Redă acum",
+        "transition": "Tranziție",
+        "transition-default": "Ca în setări"
       },
       "settings": {
         "ask-on-play": "Alege partea înainte de redare (play deschide „Redă de la…”)",
@@ -841,7 +843,14 @@
         "outro-steepness": "Cât de repede scade piesa veche",
         "loudness-matching": "Același volum pentru toate piesele",
         "fade-in-beats": "Durata crossfade-ului în bătăi (secunde când piesa nu are un ritm clar)",
-        "fade-beats": "Bătăi"
+        "fade-beats": "Bătăi",
+        "style": {
+          "label": "Stilul tranziției",
+          "fade": "Crossfade",
+          "tape-stop": "Oprire de bandă",
+          "filter": "Filtru",
+          "bass-swap": "Schimb de bas"
+        }
       }
     },
     "shortcuts": {
