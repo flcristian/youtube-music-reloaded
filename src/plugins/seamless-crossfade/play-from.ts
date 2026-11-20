@@ -5,8 +5,10 @@
 import { t } from '@/i18n';
 import { drawWaveform } from '@/plugins/waveform-seekbar/draw';
 import { loadPeaks } from '@/plugins/waveform-seekbar/peaks';
+import { tempoCache } from '@/plugins/waveform-seekbar/tempo';
 
 import { bestPartStart, loadReplayGraph } from './best-part';
+import { snapPart } from './part-snap';
 
 import type { MusicPlayer } from '@/types/music-player';
 
@@ -286,6 +288,8 @@ export class PlayFrom {
   private readonly scheduled = new Map<string, Interval>();
   /** Songs of a "best parts" playlist session that haven't played yet. */
   private bestParts = new Set<string>();
+  /** Of those, the ones whose part was moved onto phrases/bars. */
+  private readonly snapped = new Set<string>();
   /** Their titles (normalized), to recognize another version of a song. */
   private readonly bestPartTitles = new Map<string, string>();
   /** "Play from…" (play now): the next song that starts is the chosen one. */
@@ -343,11 +347,32 @@ export class PlayFrom {
   }
 
   /**
-   * The scheduled entry for the playing song. Songs can play under another
-   * id than the one in their menu (song vs. music video version), so also
-   * look at every id in the playing song's queue entry.
+   * The scheduled entry for the playing song; a best-parts song's part is
+   * moved onto its phrases/bars once its tempo is known (once).
    */
   private findScheduled(videoId: string) {
+    const found = this.findScheduledEntry(videoId);
+    if (
+      !found ||
+      !this.bestParts.has(found.key) ||
+      this.snapped.has(found.key)
+    ) {
+      return found;
+    }
+    const tempo = tempoCache.get(found.key) ?? tempoCache.get(videoId);
+    if (!tempo) return found;
+    const interval = snapPart(tempo, found.interval);
+    this.snapped.add(found.key);
+    this.scheduled.set(found.key, interval);
+    return { key: found.key, interval };
+  }
+
+  /**
+   * Songs can play under another id than the one in their menu (song vs.
+   * music video version), so also look at every id in the playing song's
+   * queue entry.
+   */
+  private findScheduledEntry(videoId: string) {
     const direct = this.scheduled.get(videoId);
     if (direct) return { key: videoId, interval: direct };
     if (!this.scheduled.size) return undefined;
@@ -821,6 +846,7 @@ export class PlayFrom {
   }
 
   private endBestParts() {
+    this.snapped.clear();
     for (const videoId of this.bestParts) this.scheduled.delete(videoId);
     this.bestParts.clear();
     this.bestPartTitles.clear();
